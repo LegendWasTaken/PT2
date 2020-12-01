@@ -6,24 +6,27 @@
 
 #include <pt2/vec3.h>
 
-struct HitRecord {
-    Vec3 normal;
-    Vec3 emission;
-    Vec3 albedo;
-    Vec3 intersection_point;
-    float distance = std::numeric_limits<float>::min();
+struct HitRecord
+{
+    Vec3  normal;
+    Vec3  emission;
+    Vec3  albedo;
+    Vec3  intersection_point;
+    float distance       = std::numeric_limits<float>::min();
     float reflectiveness = 0;
-    bool hit = false;
+    bool  hit            = false;
 };
 
-struct Vertex {
-    Vec3 position;
-    Vec3 normal;
+struct Vertex
+{
+    Vec3  position;
+    Vec3  normal;
     float u = -1.f;
     float v = -1.f;
 };
 
-class AABB {
+class AABB
+{
 public:
     AABB();
 
@@ -35,7 +38,7 @@ public:
 
     [[nodiscard]] Vec3 get_center() const noexcept;
 
-    [[nodiscard]] bool contains(const Vec3& point) const noexcept;
+    [[nodiscard]] bool contains(const Vec3 &point) const noexcept;
 
     [[nodiscard]] float size_x() const noexcept;
 
@@ -55,18 +58,21 @@ public:
     float max_z;
 };
 
-struct Triangle {
+struct Triangle
+{
     Vertex verts[3];
-    AABB aabb;
+    AABB   aabb;
 };
 
-struct Indice {
+struct Indice
+{
     size_t position;
     size_t normal;
     size_t texture;
 };
 
-class Ray {
+class Ray
+{
 public:
     Ray(Vec3 origin, Vec3 direction);
 
@@ -76,16 +82,17 @@ public:
     Vec3 direction;
 };
 
-class BvhNode {
+class BvhNode
+{
 public:
-
-    [[nodiscard]] void add_triangles(const Ray &ray, std::vector<Triangle>* triangles) const noexcept;
+    [[nodiscard]] void
+      add_triangles(const Ray &ray, std::vector<Triangle> *triangles) const noexcept;
 
     [[nodiscard]] bool is_leaf() const noexcept;
 
     AABB aabb;
 
-    std::vector<Triangle> triangles;
+    std::vector<Triangle>    triangles;
     std::unique_ptr<BvhNode> left;
     std::unique_ptr<BvhNode> right;
 };

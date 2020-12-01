@@ -1,8 +1,8 @@
 #pragma once
 
 #if __has_include(<GLFW/glfw3.h>)
-    #define PT2_GLFW
-    #include <GLFW/glfw3.h>
+#define PT2_GLFW
+#include <GLFW/glfw3.h>
 #endif
 
 #include <memory>
@@ -15,8 +15,8 @@
 
 namespace pt2
 {
-    constexpr uint32_t INVALID_HANDLE = std::numeric_limits<uint32_t>::max();
-    constexpr uint8_t MAX_THREAD_COUNT = 0;
+    constexpr uint32_t INVALID_HANDLE   = std::numeric_limits<uint32_t>::max();
+    constexpr uint8_t  MAX_THREAD_COUNT = 0;
 
     [[nodiscard]] uint32_t load_image(std::string_view image_name);
 
@@ -32,4 +32,4 @@ namespace pt2
 
 #endif
 
-}
+}    // namespace pt2

@@ -16,12 +16,9 @@ Vec3::Vec3(float x, float y, float z)
 
 float Vec3::operator[](int i) const noexcept
 {
-    if (i == 0)
-        return x;
-    if (i == 1)
-        return y;
-    if (i == 2)
-        return z;
+    if (i == 0) return x;
+    if (i == 1) return y;
+    if (i == 2) return z;
     return x;
 }
 
@@ -108,13 +105,13 @@ void Vec3::mix(const Vec3 &a, float t) noexcept
 
 void Vec3::refract(const Vec3 &a, float t) noexcept
 {
-    Vec3 unit = to_unit_vector();
-    float dot = unit.dot(a);
-    float disc = 1.f - t * t * (1.0 - dot * dot);
-    Vec3 other = a * sqrtf(disc);
-    Vec3 ret = (a * dot);
+    Vec3  unit  = to_unit_vector();
+    float dot   = unit.dot(a);
+    float disc  = 1.f - t * t * (1.0 - dot * dot);
+    Vec3  other = a * sqrtf(disc);
+    Vec3  ret   = (a * dot);
     ret -= a;
-    ret = ret * t;
+    ret   = ret * t;
     *this = disc > 0.0f ? ret - other : Vec3();
 }
 
@@ -122,7 +119,6 @@ void Vec3::refract(const Vec3 &a, float t) noexcept
 {
     return x * a.x + y * a.y + z * a.z;
 }
-
 
 [[nodiscard]] float Vec3::dist(const Vec3 &a) const noexcept
 {
@@ -141,13 +137,10 @@ void Vec3::refract(const Vec3 &a, float t) noexcept
 
 [[nodiscard]] Vec3 Vec3::cross(const Vec3 &a) const noexcept
 {
-    return Vec3(
-            y * a.z - z * a.y,
-            z * a.x - x * a.z,
-            x * a.y - y * a.x);
+    return Vec3(y * a.z - z * a.y, z * a.x - x * a.z, x * a.y - y * a.x);
 }
 
-[[nodiscard]]  Vec3 Vec3::to_unit_vector() const noexcept
+[[nodiscard]] Vec3 Vec3::to_unit_vector() const noexcept
 {
     float t = length();
     return Vec3(x / t, y / t, z / t);
