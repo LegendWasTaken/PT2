@@ -26,8 +26,10 @@ namespace pt2
     std::mt19937                                     gen;
     std::uniform_real_distribution<float>            dist(0.f, 1.f);
     uint32_t                                         skybox = pt2::INVALID_HANDLE;
+
     HitRecord           intersect_scene(const Ray &ray, RTCScene scene);
     [[nodiscard]] float rand() { return dist(gen); };
+    void                process_hit_material(Ray &ray, HitRecord &record);
 
     uint32_t load_image(std::string_view image_name)
     {
@@ -95,10 +97,15 @@ namespace pt2
 
         const auto local_skybox = &loaded_images[skybox];
 
-        std::vector<Vec3>     emissions;
-        std::vector<Vec3>     vertices;
-        std::vector<Vec3>     normals;
-        std::vector<Vec3>     colours;
+        std::vector<Vec3> emissions;
+        std::vector<Vec3> vertices;
+        std::vector<Vec3> normals;
+        std::vector<Vec3> colours;
+        struct
+        {
+            std::vector<float> diffuseness;
+            std::vector<float> reflectiveness;
+        } material_data;
         std::vector<uint32_t> indices;
 
         for (const auto &model_path : models)
@@ -123,13 +130,16 @@ namespace pt2
             if (!err.empty()) std::cerr << err << std::endl;
             if (!ret) exit(-1);
 
-            colours.reserve(colours.size() + attrib.vertices.size() / 3);
-            indices.reserve(indices.size() + attrib.vertices.size() / 3);
-            vertices.reserve(vertices.size() + attrib.vertices.size() / 3);
-            emissions.reserve(emissions.size() + attrib.vertices.size() / 3);
+            const auto vertex_count = attrib.vertices.size() / 3;
+            colours.reserve(colours.size() + vertex_count);
+            indices.reserve(indices.size() + vertex_count);
+            vertices.reserve(vertices.size() + vertex_count);
+            emissions.reserve(emissions.size() + vertex_count);
+            material_data.reflectiveness.resize(material_data.reflectiveness.size() + vertex_count, 0.f);
+            material_data.diffuseness.resize(material_data.diffuseness.size() + vertex_count, 1.f);
             for (auto i = 0; i < attrib.vertices.size(); i += 3)
             {
-                colours.emplace_back(1, 1, 1);
+                colours.emplace_back(.2, .2, .2);
                 emissions.emplace_back(0, 0, 0);
                 vertices.emplace_back(
                   attrib.vertices[i + 0],
@@ -171,8 +181,14 @@ namespace pt2
                         const auto idx = shape.mesh.indices[index_offset + v];
                         indices.push_back(idx.vertex_index);
 
+                        material_data.diffuseness[idx.vertex_index] = .6;
+                        material_data.reflectiveness[idx.vertex_index] = .4;
+
                         if (mat_exists)
                         {
+                            emissions[idx.vertex_index] =
+                              Vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
+
                             if (!tex.empty())
                             {
                                 const auto u     = attrib.texcoords[2 * idx.texcoord_index + 0];
@@ -185,20 +201,14 @@ namespace pt2
                                   static_cast<float>(image >> 16 & 0xFF) / 255.f);
                             }
                         }
-                        else
-                        {
-                            emissions[idx.texcoord_index] = Vec3(0, 0, 0);
-                            colours[idx.vertex_index]     = Vec3(1, 1, 1);
-                        }
                     }
                     index_offset += vertex;
                 }
             }
-            std::cout << "done" << std::endl;
         }
         std::vector<std::thread> work_threads;
         const auto               thread_count = detail.thread_count == pt2::MAX_THREAD_COUNT
-                        ? std::thread::hardware_concurrency() * 2 - 1
+                        ? std::thread::hardware_concurrency() - 1
                         : detail.thread_count;
         work_threads.reserve(thread_count);
 
@@ -220,7 +230,7 @@ namespace pt2
           3 * sizeof(unsigned),
           indices.size() / 3);
 
-        rtcSetGeometryVertexAttributeCount(geom, 2);
+        rtcSetGeometryVertexAttributeCount(geom, 4);
         rtcSetSharedGeometryBuffer(
           geom,
           RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
@@ -241,10 +251,30 @@ namespace pt2
           sizeof(Vec3),
           emissions.size());
 
+        rtcSetSharedGeometryBuffer(
+          geom,
+          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+          2,
+          RTC_FORMAT_FLOAT,
+          material_data.diffuseness.data(),
+          0,
+          sizeof(float),
+          material_data.diffuseness.size());
+
+        rtcSetSharedGeometryBuffer(
+          geom,
+          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+          3,
+          RTC_FORMAT_FLOAT,
+          material_data.reflectiveness.data(),
+          0,
+          sizeof(float),
+          material_data.reflectiveness.size());
+
         if (_vertices != nullptr)
             ::memcpy(_vertices, vertices.data(), sizeof(Vec3) * vertices.size());
         if (_indices != nullptr)
-            ::memcpy(_indices, indices.data(), sizeof(uint32_t) * (indices.size() / 3));
+            ::memcpy(_indices, indices.data(), sizeof(uint32_t) * indices.size());
 
         rtcCommitGeometry(geom);
         rtcAttachGeometry(scene, geom);
@@ -295,24 +325,10 @@ namespace pt2
                                           static_cast<float>(image >> 0 & 0xFF) / 255.f,
                                           static_cast<float>(image >> 8 & 0xFF) / 255.f,
                                           static_cast<float>(image >> 16 & 0xFF) / 255.f);
-                                        //                                        const auto at =
-                                        //                                        Vec3(1, 1, 1);
                                         final += throughput * at;
                                         break;
                                     }
-                                    ray.origin =
-                                      current.intersection_point + current.normal * 0.01f;
-                                    const auto u         = rand();
-                                    const auto v         = rand();
-                                    const auto phi       = 2.0f * 3.1415 * u;
-                                    const auto cos_theta = 2.0f * v - 1.0f;
-                                    const auto a         = sqrtf(1.0f - cos_theta * cos_theta);
-                                    ray.direction        = current.normal +
-                                      Vec3(a * cosf(phi), a * sinf(phi), cos_theta)
-                                        .to_unit_vector();
-                                    current.reflectiveness =
-                                      fmaxf(0.f, current.normal.dot(ray.direction));
-
+                                    process_hit_material(ray, current);
                                     final += throughput * current.emission;
                                     throughput *= current.albedo * current.reflectiveness;
                                 }
@@ -321,11 +337,12 @@ namespace pt2
                             }
 
                             buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>((final_pixel.x / (float) detail.spp) * 255);
+                              static_cast<uint8_t>(sqrtf(final_pixel.x / (float) detail.spp) * 255);
                             buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>((final_pixel.y / (float) detail.spp) * 255) << 8;
+                              static_cast<uint8_t>(sqrtf(final_pixel.y / (float) detail.spp) * 255)
+                              << 8;
                             buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>((final_pixel.z / (float) detail.spp) * 255)
+                              static_cast<uint8_t>(sqrtf(final_pixel.z / (float) detail.spp) * 255)
                               << 16;
                             buffer[x + y * detail.width] |= static_cast<uint8_t>(~0) << 24;
                         }
@@ -366,6 +383,31 @@ namespace pt2
 
 #endif
 
+    void process_hit_material(Ray &ray, HitRecord &record)
+    {
+        auto material_branch = rand();
+
+        if (material_branch < record.material_data.diffuseness)
+//        if (true)
+        {
+            ray.origin           = record.intersection_point + record.normal * 0.01f;
+            const auto u         = rand();
+            const auto v         = rand();
+            const auto phi       = 2.0f * 3.1415 * u;
+            const auto cos_theta = 2.0f * v - 1.0f;
+            const auto a         = sqrtf(1.0f - cos_theta * cos_theta);
+            ray.direction =
+              record.normal + Vec3(a * cosf(phi), a * sinf(phi), cos_theta).to_unit_vector();
+            record.reflectiveness = fmaxf(0.f, record.normal.dot(ray.direction));
+        } else
+        {
+            ray.origin            = record.intersection_point + record.normal * 0.01f;
+            ray.direction         = ray.direction.reflect(record.normal);
+            record.reflectiveness = 1;
+        }
+        material_branch -= record.material_data.reflectiveness;
+    }
+
     HitRecord intersect_scene(const Ray &ray, RTCScene scene)
     {
         struct RTCIntersectContext ctx
@@ -393,8 +435,9 @@ namespace pt2
 
         if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID)
         {
+            const auto geo = rtcGetGeometry(scene, rayhit.hit.geomID);
             rtcInterpolate0(
-              rtcGetGeometry(scene, rayhit.hit.geomID),
+              geo,
               rayhit.hit.primID,
               rayhit.hit.u,
               rayhit.hit.v,
@@ -404,7 +447,7 @@ namespace pt2
               3);
 
             rtcInterpolate0(
-              rtcGetGeometry(scene, rayhit.hit.geomID),
+              geo,
               rayhit.hit.primID,
               rayhit.hit.u,
               rayhit.hit.v,
@@ -412,6 +455,26 @@ namespace pt2
               1,
               reinterpret_cast<float *>(&best.emission),
               3);
+
+            rtcInterpolate0(
+              geo,
+              rayhit.hit.primID,
+              rayhit.hit.u,
+              rayhit.hit.v,
+              RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+              2,
+              &best.material_data.diffuseness,
+              1);
+
+            rtcInterpolate0(
+              geo,
+              rayhit.hit.primID,
+              rayhit.hit.u,
+              rayhit.hit.v,
+              RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+              3,
+              &best.material_data.reflectiveness,
+              1);
 
             best.intersection_point = ray.point_at(rayhit.ray.tfar);
             best.distance           = rayhit.ray.tfar;

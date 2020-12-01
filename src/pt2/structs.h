@@ -42,8 +42,9 @@ namespace pt2
         uint16_t height       = 512;
         struct
         {
-            Vec3 origin;
-            Vec3 lookat;
+            Vec3  origin;
+            Vec3  lookat;
+            float fov = 90;
         } camera;
     };
 
@@ -56,6 +57,12 @@ namespace pt2
         float distance       = std::numeric_limits<float>::min();
         float reflectiveness = 0;
         bool  hit            = false;
+
+        struct
+        {
+            float diffuseness = 1;
+            float reflectiveness = 0;
+        } material_data;
     };
 
     class AABB
