@@ -8,7 +8,7 @@ namespace pt2
 {
     Camera::Camera(Vec3 location, Vec3 look_at, float fov, float aspect)
     {
-        const auto theta       = fov * PI / 180.f;
+        const auto theta       = fov * 3.141592 / 180.f;
         const auto half_height = tanf(theta / 2.f);
         const auto half_width  = aspect * half_height;
 

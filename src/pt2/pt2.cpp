@@ -90,7 +90,7 @@ namespace pt2
         const auto scene_camera = Camera(
           detail.camera.origin,
           detail.camera.lookat,
-          90,
+          60,
           (float) detail.width / (float) detail.height);
 
         const auto local_skybox = &loaded_images[skybox];
@@ -130,7 +130,7 @@ namespace pt2
             for (auto i = 0; i < attrib.vertices.size(); i += 3)
             {
                 colours.emplace_back(1, 1, 1);
-                emissions.emplace_back(1, 1, 1);
+                emissions.emplace_back(0, 0, 0);
                 vertices.emplace_back(
                   attrib.vertices[i + 0],
                   attrib.vertices[i + 1],
@@ -173,9 +173,6 @@ namespace pt2
 
                         if (mat_exists)
                         {
-                            emissions[idx.texcoord_index] =
-                              Vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
-
                             if (!tex.empty())
                             {
                                 const auto u     = attrib.texcoords[2 * idx.texcoord_index + 0];
@@ -221,7 +218,7 @@ namespace pt2
           0,
           RTC_FORMAT_UINT3,
           3 * sizeof(unsigned),
-          indices.size());
+          indices.size() / 3);
 
         rtcSetGeometryVertexAttributeCount(geom, 2);
         rtcSetSharedGeometryBuffer(
@@ -247,7 +244,7 @@ namespace pt2
         if (_vertices != nullptr)
             ::memcpy(_vertices, vertices.data(), sizeof(Vec3) * vertices.size());
         if (_indices != nullptr)
-            ::memcpy(_indices, indices.data(), sizeof(uint32_t) * indices.size());
+            ::memcpy(_indices, indices.data(), sizeof(uint32_t) * (indices.size() / 3));
 
         rtcCommitGeometry(geom);
         rtcAttachGeometry(scene, geom);
@@ -284,7 +281,7 @@ namespace pt2
 
                                 for (int bounce = 0; bounce < detail.max_bounces; bounce++)
                                 {
-                                    const auto current = pt2::intersect_scene(ray, scene);
+                                    auto current = pt2::intersect_scene(ray, scene);
 
                                     if (!current.hit)
                                     {
@@ -303,10 +300,6 @@ namespace pt2
                                         final += throughput * at;
                                         break;
                                     }
-
-                                    final += throughput * current.emission;
-                                    throughput *= current.albedo * current.reflectiveness;
-
                                     ray.origin =
                                       current.intersection_point + current.normal * 0.01f;
                                     const auto u         = rand();
@@ -317,6 +310,11 @@ namespace pt2
                                     ray.direction        = current.normal +
                                       Vec3(a * cosf(phi), a * sinf(phi), cos_theta)
                                         .to_unit_vector();
+                                    current.reflectiveness =
+                                      fmaxf(0.f, current.normal.dot(ray.direction));
+
+                                    final += throughput * current.emission;
+                                    throughput *= current.albedo * current.reflectiveness;
                                 }
 
                                 final_pixel += final;
@@ -405,17 +403,20 @@ namespace pt2
               reinterpret_cast<float *>(&best.albedo),
               3);
 
-            //            rtcInterpolate0(rtcGetGeometry(scene, rayhit.hit.geomID),
-            //            rayhit.hit.primID, rayhit.hit.u, rayhit.hit.v,
-            //                            RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE, 1,
-            //                            reinterpret_cast<float *>(&best.emission), 3);
-            best.albedo             = Vec3(1, 1, 1);
-            best.emission           = best.albedo * 0;
+            rtcInterpolate0(
+              rtcGetGeometry(scene, rayhit.hit.geomID),
+              rayhit.hit.primID,
+              rayhit.hit.u,
+              rayhit.hit.v,
+              RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+              1,
+              reinterpret_cast<float *>(&best.emission),
+              3);
+
             best.intersection_point = ray.point_at(rayhit.ray.tfar);
             best.distance           = rayhit.ray.tfar;
             best.hit                = true;
             best.normal = Vec3(rayhit.hit.Ng_x, rayhit.hit.Ng_y, rayhit.hit.Ng_z).to_unit_vector();
-            best.reflectiveness = fmaxf(0.f, best.normal.dot(ray.direction));
         }
 
         return best;

@@ -8,7 +8,7 @@ int main()
     //    pt2::load_model("../assets/models/", "tridel-interior-test.obj");
     //    pt2::load_model("../assets/models/interior/", "interior.obj");
     //    pt2::load_model("../assets/models/sponza/", "crytek-sponza-huge-vray.obj");
-    //    pt2::load_model("../assets/models/", "stanford-dragon.obj");
+//        pt2::load_model("../assets/models/", "stanford-dragon.obj");
 
     auto skybox_handle = pt2::load_image("../assets/images/kloofendal_48d_partly_cloudy.jpg");
     if (skybox_handle != pt2::INVALID_HANDLE) pt2::set_skybox(skybox_handle);
@@ -17,9 +17,9 @@ int main()
     detail.width         = 1280;
     detail.height        = 720;
     detail.max_bounces   = 16;
-    detail.spp           = 256;
+    detail.spp           = 128;
     detail.thread_count  = pt2::MAX_THREAD_COUNT;
-    detail.camera.origin = { -10.f, 10.5f, 10.f };
+    detail.camera.origin = { 10.f, 10.5f, -10.f };
     detail.camera.lookat = { 0.f, 0.f, 0.f };
 
     // Good for tridel interior test scene
