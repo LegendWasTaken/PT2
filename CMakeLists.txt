@@ -19,7 +19,7 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(glfw)
 
-add_executable(PT2 src/main.cpp src/pt2/vec3.cpp src/pt2/vec3.h src/pt2/camera.cpp src/pt2/camera.h src/pt2/geometry.h src/pt2/geometry.cpp src/pt2/pt2.h src/pt2/pt2.cpp src/pt2/structs.h)
+add_executable(PT2 src/main.cpp src/pt2/vec3.cpp src/pt2/vec3.h src/pt2/pt2.h src/pt2/pt2.cpp src/pt2/structs.h src/pt2/structs.cpp)
 target_include_directories(PT2 PUBLIC "extern")
 target_include_directories(PT2 PUBLIC "src")
 target_link_libraries(PT2 ${OPENGL_LIBRARIES} glfw embree)
