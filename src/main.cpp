@@ -16,8 +16,8 @@ int main()
     pt2::SceneRenderDetail detail {};
     detail.width         = 512;
     detail.height        = 512;
-    detail.max_bounces   = 16;
-    detail.spp           = 512;
+    detail.max_bounces   = 1024;
+    detail.spp           = 128;
     detail.thread_count  = pt2::MAX_THREAD_COUNT;
     detail.camera.origin = { -13, 10, 13 };
     detail.camera.lookat = { 0, 0, -2 };

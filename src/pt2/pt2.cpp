@@ -105,6 +105,7 @@ namespace pt2
         {
             std::vector<float> diffuseness;
             std::vector<float> reflectiveness;
+            std::vector<float> glassiness;
         } material_data;
         std::vector<uint32_t> indices;
 
@@ -135,11 +136,14 @@ namespace pt2
             indices.reserve(indices.size() + vertex_count);
             vertices.reserve(vertices.size() + vertex_count);
             emissions.reserve(emissions.size() + vertex_count);
-            material_data.reflectiveness.resize(material_data.reflectiveness.size() + vertex_count, 0.f);
             material_data.diffuseness.resize(material_data.diffuseness.size() + vertex_count, 1.f);
+            material_data.reflectiveness.resize(
+              material_data.reflectiveness.size() + vertex_count,
+              0.f);
+            material_data.glassiness.resize(material_data.glassiness.size() + vertex_count, 0.f);
             for (auto i = 0; i < attrib.vertices.size(); i += 3)
             {
-                colours.emplace_back(.2, .2, .2);
+                colours.emplace_back(.3, .3, .3);
                 emissions.emplace_back(0, 0, 0);
                 vertices.emplace_back(
                   attrib.vertices[i + 0],
@@ -181,8 +185,9 @@ namespace pt2
                         const auto idx = shape.mesh.indices[index_offset + v];
                         indices.push_back(idx.vertex_index);
 
-                        material_data.diffuseness[idx.vertex_index] = .6;
-                        material_data.reflectiveness[idx.vertex_index] = .4;
+                        material_data.diffuseness[idx.vertex_index]    = .0f;
+                        material_data.reflectiveness[idx.vertex_index] = .0f;
+                        material_data.glassiness[idx.vertex_index]     = 1.f;
 
                         if (mat_exists)
                         {
@@ -230,7 +235,7 @@ namespace pt2
           3 * sizeof(unsigned),
           indices.size() / 3);
 
-        rtcSetGeometryVertexAttributeCount(geom, 4);
+        rtcSetGeometryVertexAttributeCount(geom, 5);
         rtcSetSharedGeometryBuffer(
           geom,
           RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
@@ -271,6 +276,16 @@ namespace pt2
           sizeof(float),
           material_data.reflectiveness.size());
 
+        rtcSetSharedGeometryBuffer(
+          geom,
+          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+          4,
+          RTC_FORMAT_FLOAT,
+          material_data.glassiness.data(),
+          0,
+          sizeof(float),
+          material_data.glassiness.size());
+
         if (_vertices != nullptr)
             ::memcpy(_vertices, vertices.data(), sizeof(Vec3) * vertices.size());
         if (_indices != nullptr)
@@ -309,7 +324,7 @@ namespace pt2
                                 auto throughput = Vec3(1, 1, 1);
                                 auto final      = Vec3(0, 0, 0);
 
-                                for (int bounce = 0; bounce < detail.max_bounces; bounce++)
+                                for (auto bounce = 0; bounce < detail.max_bounces; bounce++)
                                 {
                                     auto current = pt2::intersect_scene(ray, scene);
 
@@ -388,7 +403,6 @@ namespace pt2
         auto material_branch = rand();
 
         if (material_branch < record.material_data.diffuseness)
-//        if (true)
         {
             ray.origin           = record.intersection_point + record.normal * 0.01f;
             const auto u         = rand();
@@ -399,13 +413,77 @@ namespace pt2
             ray.direction =
               record.normal + Vec3(a * cosf(phi), a * sinf(phi), cos_theta).to_unit_vector();
             record.reflectiveness = fmaxf(0.f, record.normal.dot(ray.direction));
-        } else
+            return;
+        }
+        material_branch -= record.material_data.diffuseness;
+
+        if (material_branch < record.material_data.reflectiveness)
         {
             ray.origin            = record.intersection_point + record.normal * 0.01f;
             ray.direction         = ray.direction.reflect(record.normal);
             record.reflectiveness = 1;
+            return;
         }
         material_branch -= record.material_data.reflectiveness;
+
+        if (material_branch < record.material_data.glassiness)
+        {
+            const auto refract = [](Vec3 &v, Vec3 &n, float nit, Vec3 &refracted) {
+                Vec3  uv   = v.to_unit_vector();
+                float dt   = uv.dot(n);
+                float disc = 1.0f - nit * nit * (1 - dt * dt);
+                if (disc > 0)
+                {
+                    refracted = (uv - n * dt) * nit - n * sqrtf(disc);
+                    return true;
+                }
+                return false;
+            };
+
+            const auto schlick = [](float cosine, float refIndex) {
+                float r0 = (1.0f - refIndex) / (1.0f + refIndex);
+                r0       = r0 * r0;
+                return r0 + (1.0f - r0) * powf((1 - cosine), 5);
+            };
+
+            auto outward_normal = Vec3();
+            auto rayOrigin      = ray.direction;
+            auto reflected      = rayOrigin - record.normal * record.normal.dot(ray.direction) * 2;
+            auto nit            = 0.f;
+            auto cosine         = 0.f;
+            if (ray.direction.dot(record.normal) > 0)
+            {
+                outward_normal = record.normal * -1.0f;
+                nit            = 1.5f;
+                cosine         = 1.5f * ray.direction.dot(record.normal);
+            }
+            else
+            {
+                outward_normal = record.normal;
+                nit            = 1.0f / 1.5f;
+                cosine         = -ray.direction.dot(record.normal);
+            }
+            auto  refracted = Vec3();
+            float reflectChance;
+            if (refract(ray.direction, outward_normal, nit, refracted))
+            { reflectChance = schlick(cosine, 1.5f); }
+            else
+            {
+                reflectChance = 1;
+            }
+            if (rand() < reflectChance)
+            {
+                ray = Ray(record.intersection_point + outward_normal * 0.1f, reflected);
+                record.reflectiveness = 1.f;
+            }
+            else
+            {
+                ray = Ray(record.intersection_point + outward_normal * -0.1f, refracted);
+                record.reflectiveness = 1.f;
+            }
+            return;
+        }
+        material_branch -= record.material_data.glassiness;
     }
 
     HitRecord intersect_scene(const Ray &ray, RTCScene scene)
@@ -474,6 +552,16 @@ namespace pt2
               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
               3,
               &best.material_data.reflectiveness,
+              1);
+
+            rtcInterpolate0(
+              geo,
+              rayhit.hit.primID,
+              rayhit.hit.u,
+              rayhit.hit.v,
+              RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+              4,
+              &best.material_data.glassiness,
               1);
 
             best.intersection_point = ray.point_at(rayhit.ray.tfar);

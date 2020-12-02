@@ -105,14 +105,12 @@ void Vec3::mix(const Vec3 &a, float t) noexcept
 
 void Vec3::refract(const Vec3 &a, float t) noexcept
 {
-    Vec3  unit  = to_unit_vector();
-    float dot   = unit.dot(a);
-    float disc  = 1.f - t * t * (1.0 - dot * dot);
-    Vec3  other = a * sqrtf(disc);
-    Vec3  ret   = (a * dot);
-    ret -= a;
-    ret   = ret * t;
-    *this = disc > 0.0f ? ret - other : Vec3();
+    const auto n_dot_i = this->dot(a);
+    const auto k = 1.f - t * t * (1.0f - n_dot_i * n_dot_i);
+    if (k < 0.f)
+        *this = Vec3(0, 0, 0);
+    else
+        *this = *this * t - a * (t * n_dot_i + sqrtf(k));
 }
 
 [[nodiscard]] float Vec3::dot(const Vec3 &a) const noexcept

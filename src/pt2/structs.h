@@ -35,9 +35,9 @@ namespace pt2
 
     struct SceneRenderDetail
     {
-        uint8_t  max_bounces  = 5;
         uint8_t  thread_count = 1;
         uint16_t spp          = 4;
+        uint16_t max_bounces  = 5;
         uint16_t width        = 512;
         uint16_t height       = 512;
         struct
@@ -62,6 +62,7 @@ namespace pt2
         {
             float diffuseness = 1;
             float reflectiveness = 0;
+            float glassiness = 0;
         } material_data;
     };
 
