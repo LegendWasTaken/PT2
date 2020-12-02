@@ -185,14 +185,30 @@ namespace pt2
                         const auto idx = shape.mesh.indices[index_offset + v];
                         indices.push_back(idx.vertex_index);
 
-                        material_data.diffuseness[idx.vertex_index]    = .0f;
-                        material_data.reflectiveness[idx.vertex_index] = .0f;
-                        material_data.glassiness[idx.vertex_index]     = 1.f;
+                        //                        material_data.diffuseness[idx.vertex_index]    =
+                        //                        .0f;
+                        //                        material_data.reflectiveness[idx.vertex_index] =
+                        //                        .0f; material_data.glassiness[idx.vertex_index]
+                        //                        = 1.f;
 
                         if (mat_exists)
                         {
                             emissions[idx.vertex_index] =
                               Vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
+
+                            auto total_material_numbers = mat.dissolve;
+
+                            if (mat.name == "windows")
+                            {
+                                material_data.diffuseness[idx.vertex_index] = 0.f;
+                                material_data.glassiness[idx.vertex_index]  = 1.f;
+                                colours[idx.vertex_index]                   = Vec3(0.2, 0.2, 0.2);
+                            }
+
+                            if (mat.name == "Material")
+                            {
+                                emissions[idx.vertex_index] = Vec3(0.6, 0.6, 3);
+                            }
 
                             if (!tex.empty())
                             {
@@ -332,9 +348,11 @@ namespace pt2
                                     {
                                         float u = 0.5f +
                                           atan2f(ray.direction.z, ray.direction.x) / (2 * 3.1415);
-                                        float      v     = 0.5f - asinf(ray.direction.y) / 3.1415;
+                                        float v = 0.5f - asinf(ray.direction.y) / 3.1415;
+                                        v *= -1;
+                                        v += 1;
                                         uint32_t   image = skybox == pt2::INVALID_HANDLE
-                                            ? ~0
+                                            ? 0
                                             : local_skybox->get(u, v);
                                         const auto at    = Vec3(
                                           static_cast<float>(image >> 0 & 0xFF) / 255.f,
@@ -352,12 +370,12 @@ namespace pt2
                             }
 
                             buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>(sqrtf(final_pixel.x / (float) detail.spp) * 255);
+                              static_cast<uint8_t>(fminf(sqrtf(final_pixel.x / (float) detail.spp), 1.f) * 255);
                             buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>(sqrtf(final_pixel.y / (float) detail.spp) * 255)
+                              static_cast<uint8_t>(fminf(sqrtf(final_pixel.y / (float) detail.spp), 1.f) * 255)
                               << 8;
                             buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>(sqrtf(final_pixel.z / (float) detail.spp) * 255)
+                              static_cast<uint8_t>(fminf(sqrtf(final_pixel.z / (float) detail.spp), 1.f) * 255)
                               << 16;
                             buffer[x + y * detail.width] |= static_cast<uint8_t>(~0) << 24;
                         }
@@ -593,7 +611,9 @@ namespace pt2
 
     auto Image::get(float u, float v) const noexcept -> uint32_t
     {
-        return get(static_cast<uint32_t>(u * _width), static_cast<uint32_t>(v * _height));
+        return get(
+          static_cast<uint32_t>(u * _width),
+          static_cast<uint32_t>((v * -1 + 1) * _height));
     }
 
     auto Image::get(uint32_t x, uint32_t y) const noexcept -> uint32_t
