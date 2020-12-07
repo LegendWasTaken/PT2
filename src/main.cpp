@@ -20,7 +20,7 @@ int main()
     detail.width         = 512;
     detail.height        = 512;
     detail.max_bounces   = 1024;
-    detail.spp           = 256;
+    detail.spp           = 1024;
     detail.thread_count  = pt2::MAX_THREAD_COUNT;
     detail.camera.origin = { -3, 3, -7 };
     detail.camera.lookat = { 0, 2, 0 };
