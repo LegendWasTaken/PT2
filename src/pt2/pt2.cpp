@@ -23,13 +23,13 @@ namespace pt2
 {
     std::vector<std::pair<std::string, std::string>> models;
     std::vector<pt2::Image>                          loaded_images;
-    std::mt19937                                     gen;
-    std::uniform_real_distribution<float>            dist(0.f, 1.f);
     uint32_t                                         skybox = pt2::INVALID_HANDLE;
-
     HitRecord           intersect_scene(const Ray &ray, RTCScene scene);
-    [[nodiscard]] float rand() { return dist(gen); };
     void                process_hit_material(Ray &ray, HitRecord &record);
+    [[nodiscard]] float rand() {
+        thread_local static std::mt19937                                     gen;
+        thread_local static std::uniform_real_distribution<float>            dist(0.f, 1.f);
+        return dist(gen); };
 
     uint32_t load_image(std::string_view image_name)
     {
@@ -206,9 +206,7 @@ namespace pt2
                             }
 
                             if (mat.name == "Material")
-                            {
-                                emissions[idx.vertex_index] = Vec3(0.6, 0.6, 3);
-                            }
+                            { emissions[idx.vertex_index] = Vec3(0.6, 0.6, 3); }
 
                             if (!tex.empty())
                             {
@@ -369,13 +367,15 @@ namespace pt2
                                 final_pixel += final;
                             }
 
+                            buffer[x + y * detail.width] |= static_cast<uint8_t>(
+                              fminf(sqrtf(final_pixel.x / (float) detail.spp), 1.f) * 255);
                             buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>(fminf(sqrtf(final_pixel.x / (float) detail.spp), 1.f) * 255);
-                            buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>(fminf(sqrtf(final_pixel.y / (float) detail.spp), 1.f) * 255)
+                              static_cast<uint8_t>(
+                                fminf(sqrtf(final_pixel.y / (float) detail.spp), 1.f) * 255)
                               << 8;
                             buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>(fminf(sqrtf(final_pixel.z / (float) detail.spp), 1.f) * 255)
+                              static_cast<uint8_t>(
+                                fminf(sqrtf(final_pixel.z / (float) detail.spp), 1.f) * 255)
                               << 16;
                             buffer[x + y * detail.width] |= static_cast<uint8_t>(~0) << 24;
                         }
