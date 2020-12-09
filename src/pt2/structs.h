@@ -48,22 +48,26 @@ namespace pt2
         } camera;
     };
 
+    struct MaterialData
+    {
+        float diffuseness = 1;
+        float glassiness  = 0;
+        float metalness   = 0;
+
+        float roughness      = 0;
+        float reflectiveness = 0;
+    };
+
     struct HitRecord
     {
-        Vec3  normal;
-        Vec3  emission;
-        Vec3  albedo;
-        Vec3  intersection_point;
-        float distance       = std::numeric_limits<float>::min();
-        float reflectiveness = 0;
-        bool  hit            = false;
-
-        struct
-        {
-            float diffuseness = 1;
-            float reflectiveness = 0;
-            float glassiness = 0;
-        } material_data;
+        Vec3         normal;
+        Vec3         emission;
+        Vec3         albedo;
+        Vec3         intersection_point;
+        float        distance       = std::numeric_limits<float>::min();
+        float        reflectiveness = 0;
+        bool         hit            = false;
+        MaterialData material_data;
     };
 
     class AABB

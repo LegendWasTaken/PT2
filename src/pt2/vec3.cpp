@@ -106,7 +106,7 @@ void Vec3::mix(const Vec3 &a, float t) noexcept
 void Vec3::refract(const Vec3 &a, float t) noexcept
 {
     const auto n_dot_i = this->dot(a);
-    const auto k = 1.f - t * t * (1.0f - n_dot_i * n_dot_i);
+    const auto k       = 1.f - t * t * (1.0f - n_dot_i * n_dot_i);
     if (k < 0.f)
         *this = Vec3(0, 0, 0);
     else
@@ -142,4 +142,17 @@ void Vec3::refract(const Vec3 &a, float t) noexcept
 {
     float t = length();
     return Vec3(x / t, y / t, z / t);
+}
+Vec3 Vec3::half_unit_from(const Vec3 &rhs, bool normal) const noexcept
+{
+    if (normal) return (*this + rhs).to_unit_vector();
+
+    const auto normal_self = this->to_unit_vector();
+    const auto normal_rhs = rhs.to_unit_vector();
+
+    return (normal_self + normal_rhs).to_unit_vector();
+}
+Vec3 Vec3::inv() const noexcept
+{
+    return *this / 1.f;
 }

@@ -26,10 +26,12 @@ namespace pt2
     uint32_t                                         skybox = pt2::INVALID_HANDLE;
     HitRecord           intersect_scene(const Ray &ray, RTCScene scene);
     void                process_hit_material(Ray &ray, HitRecord &record);
-    [[nodiscard]] float rand() {
-        thread_local static std::mt19937                                     gen;
-        thread_local static std::uniform_real_distribution<float>            dist(0.f, 1.f);
-        return dist(gen); };
+    [[nodiscard]] float rand()
+    {
+        thread_local static std::mt19937                          gen;
+        thread_local static std::uniform_real_distribution<float> dist(0.f, 1.f);
+        return dist(gen);
+    };
 
     uint32_t load_image(std::string_view image_name)
     {
@@ -97,17 +99,12 @@ namespace pt2
 
         const auto local_skybox = &loaded_images[skybox];
 
-        std::vector<Vec3> emissions;
-        std::vector<Vec3> vertices;
-        std::vector<Vec3> normals;
-        std::vector<Vec3> colours;
-        struct
-        {
-            std::vector<float> diffuseness;
-            std::vector<float> reflectiveness;
-            std::vector<float> glassiness;
-        } material_data;
-        std::vector<uint32_t> indices;
+        std::vector<Vec3>         emissions;
+        std::vector<Vec3>         vertices;
+        std::vector<Vec3>         normals;
+        std::vector<Vec3>         colours;
+        std::vector<MaterialData> material_data;
+        std::vector<uint32_t>     indices;
 
         for (const auto &model_path : models)
         {
@@ -136,11 +133,7 @@ namespace pt2
             indices.reserve(indices.size() + vertex_count);
             vertices.reserve(vertices.size() + vertex_count);
             emissions.reserve(emissions.size() + vertex_count);
-            material_data.diffuseness.resize(material_data.diffuseness.size() + vertex_count, 1.f);
-            material_data.reflectiveness.resize(
-              material_data.reflectiveness.size() + vertex_count,
-              0.f);
-            material_data.glassiness.resize(material_data.glassiness.size() + vertex_count, 0.f);
+            material_data.resize(material_data.size() + vertex_count);
             for (auto i = 0; i < attrib.vertices.size(); i += 3)
             {
                 colours.emplace_back(.3, .3, .3);
@@ -196,12 +189,24 @@ namespace pt2
                             emissions[idx.vertex_index] =
                               Vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
 
-                            auto total_material_numbers = mat.dissolve;
+                            if (mat.name == "Material.002")
+                            {
+                                material_data[idx.vertex_index].diffuseness = 0;
+                                material_data[idx.vertex_index].metalness   = 1;
+                                colours[idx.vertex_index]                   = Vec3(0.7, 0.7, 0.7);
+                            }
+
+                            if (mat.name == "Material.003")
+                            {
+                                material_data[idx.vertex_index].diffuseness = 0;
+                                material_data[idx.vertex_index].glassiness  = 1;
+                                colours[idx.vertex_index]                   = Vec3(0.2, 0.2, 0.8);
+                            }
 
                             if (mat.name == "windows")
                             {
-                                material_data.diffuseness[idx.vertex_index] = 0.f;
-                                material_data.glassiness[idx.vertex_index]  = 1.f;
+                                material_data[idx.vertex_index].diffuseness = 0.f;
+                                material_data[idx.vertex_index].glassiness  = 1.f;
                                 colours[idx.vertex_index]                   = Vec3(0.2, 0.2, 0.2);
                             }
 
@@ -249,7 +254,8 @@ namespace pt2
           3 * sizeof(unsigned),
           indices.size() / 3);
 
-        rtcSetGeometryVertexAttributeCount(geom, 5);
+        rtcSetGeometryVertexAttributeCount(geom, 7);
+
         rtcSetSharedGeometryBuffer(
           geom,
           RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
@@ -275,30 +281,50 @@ namespace pt2
           RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
           2,
           RTC_FORMAT_FLOAT,
-          material_data.diffuseness.data(),
+          material_data.data(),
           0,
-          sizeof(float),
-          material_data.diffuseness.size());
+          sizeof(MaterialData),
+          material_data.size());
 
         rtcSetSharedGeometryBuffer(
           geom,
           RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
           3,
           RTC_FORMAT_FLOAT,
-          material_data.reflectiveness.data(),
-          0,
-          sizeof(float),
-          material_data.reflectiveness.size());
+          material_data.data(),
+          sizeof(float) * 1,
+          sizeof(MaterialData),
+          material_data.size());
 
         rtcSetSharedGeometryBuffer(
           geom,
           RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
           4,
           RTC_FORMAT_FLOAT,
-          material_data.glassiness.data(),
-          0,
-          sizeof(float),
-          material_data.glassiness.size());
+          material_data.data(),
+          sizeof(float) * 2,
+          sizeof(MaterialData),
+          material_data.size());
+
+        rtcSetSharedGeometryBuffer(
+          geom,
+          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+          5,
+          RTC_FORMAT_FLOAT,
+          material_data.data(),
+          sizeof(float) * 3,
+          sizeof(MaterialData),
+          material_data.size());
+
+        rtcSetSharedGeometryBuffer(
+          geom,
+          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+          6,
+          RTC_FORMAT_FLOAT,
+          material_data.data(),
+          sizeof(float) * 4,
+          sizeof(MaterialData),
+          material_data.size());
 
         if (_vertices != nullptr)
             ::memcpy(_vertices, vertices.data(), sizeof(Vec3) * vertices.size());
@@ -435,14 +461,68 @@ namespace pt2
         }
         material_branch -= record.material_data.diffuseness;
 
-        if (material_branch < record.material_data.reflectiveness)
+        if (material_branch < record.material_data.metalness)
         {
-            ray.origin            = record.intersection_point + record.normal * 0.01f;
-            ray.direction         = ray.direction.reflect(record.normal);
-            record.reflectiveness = 1;
+            /** Cook Torrence BRDF
+             *
+             * Equation:
+             * f_r(v,l) = D(h,a)G(v,l,a)F(v,h,f0) / 4(n*v)(n*l)
+             *
+             * Where:
+             * v = Inverse Ray Direction
+             * l = Scattered Ray Direction
+             * n = Surface Normal
+             * h = Half Unit Vector Between l and v
+             * a = roughness
+             *
+             */
+
+            /** GGX NDF
+             *
+             * Equation:
+             * D_ggx(h,a) = a^2 / pi((n*h)^2(a^2-1) + 1)^2
+             *
+             */
+            const auto a_sq       = record.material_data.roughness * record.material_data.roughness;
+            const auto h          = record.normal.half_unit_from(ray.direction.inv());
+            const auto n_dot_h_sq = powf(record.normal.dot(h), 2.f);
+
+            const auto bottom_term = M_PI * powf(n_dot_h_sq * (a_sq - 1), 2.f);
+            const auto d_ggx       = a_sq / bottom_term;
+
+            /** Geometric Mapping
+             *
+             * Equation:
+             * G_ggx(v,l,a) = G_0(n,l)G_0(n,v)
+             *
+             * G_0(x,y) = 2(x*y) / x*y + sqrt(a^2 + (1-a^2)(n*l)^2)
+             */
+
+            const auto n_dot_l    = record.normal.dot(ray.direction.reflect(record.normal));
+            const auto n_dot_l_sq = n_dot_l * n_dot_h_sq;
+            const auto g0_n_l = 2 * n_dot_l / n_dot_l + sqrtf(a_sq + (1-a_sq) * (n_dot_l_sq));
+
+            const auto n_dot_v    = record.normal.dot(ray.direction.inv());
+            const auto n_dot_v_sq  = n_dot_v * n_dot_v;
+            const auto g0_n_v = 2 * n_dot_v / n_dot_v + sqrtf(a_sq + (1-a_sq) * (n_dot_v_sq));
+
+            const auto g_ggx = g0_n_l * g0_n_v;
+
+            /** Fresnel (specular F)
+             *
+             * Equation:
+             * F_schlick(v,h,f_0) = f0 + (1 - f0)(1 - v*h)^5
+             *
+             */
+            constexpr auto f0 = 1.5f;
+            const auto f = powf(1.f - h.dot(record.normal), 5.f);
+            const auto f_schlick = f0 + (1 - f0) * f;
+
+            const auto brdf = d_ggx * g_ggx * f_schlick / 4 * n_dot_v * n_dot_l;
+
             return;
         }
-        material_branch -= record.material_data.reflectiveness;
+        material_branch -= record.material_data.metalness;
 
         if (material_branch < record.material_data.glassiness)
         {
@@ -559,7 +639,7 @@ namespace pt2
               rayhit.hit.v,
               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
               2,
-              &best.material_data.diffuseness,
+              reinterpret_cast<float *>(&best.material_data.diffuseness),
               1);
 
             rtcInterpolate0(
@@ -569,7 +649,7 @@ namespace pt2
               rayhit.hit.v,
               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
               3,
-              &best.material_data.reflectiveness,
+              reinterpret_cast<float *>(&best.material_data.glassiness),
               1);
 
             rtcInterpolate0(
@@ -579,7 +659,27 @@ namespace pt2
               rayhit.hit.v,
               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
               4,
-              &best.material_data.glassiness,
+              reinterpret_cast<float *>(&best.material_data.metalness),
+              1);
+
+            rtcInterpolate0(
+              geo,
+              rayhit.hit.primID,
+              rayhit.hit.u,
+              rayhit.hit.v,
+              RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+              5,
+              reinterpret_cast<float *>(&best.material_data.roughness),
+              1);
+
+            rtcInterpolate0(
+              geo,
+              rayhit.hit.primID,
+              rayhit.hit.u,
+              rayhit.hit.v,
+              RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+              6,
+              reinterpret_cast<float *>(&best.material_data.reflectiveness),
               1);
 
             best.intersection_point = ray.point_at(rayhit.ray.tfar);
