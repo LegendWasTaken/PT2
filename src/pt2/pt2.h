@@ -11,6 +11,7 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <glm/vec3.hpp>
+#include <atomic>
 
 namespace PT2
 {
@@ -32,17 +33,32 @@ namespace PT2
 
     private:
 
-        void _read_file(const std::string &path, std::string &contents);
+        static void _read_file(const std::string &path, std::string &contents);
 
         void _handle_window();
+
+        void _update_uniforms() const;
+
+        struct RenderTargetSettings
+        {
+            float x_offset = 0.f;
+            float y_offset = 0.f;
+            float x_scale = 1.0f;
+            float y_scale = 1.0f;
+        } _render_target_setting;
 
         RenderDetail current_render_detail;
 
         GLFWwindow *_window;
 
-        std::vector<PT2::Material> materials;
-        std::vector<glm::vec3>     vertices;
-        std::vector<uint32_t>      indices;
+        struct
+        {
+            unsigned int gl_program;
+            unsigned int gl_fragment_shader;
+            unsigned int gl_vertex_shader;
+            unsigned int resolution_x;
+            unsigned int resolution_y;
+        } _rendering_context;
     };
 }    // namespace PT2
 

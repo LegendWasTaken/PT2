@@ -25,12 +25,7 @@
 
 namespace PT2
 {
-    void Renderer::start_gui()
-    {
-        std::thread window_thread([&]() { _handle_window(); });
-
-        window_thread.join();
-    }
+    void Renderer::start_gui() { _handle_window(); }
 
     void Renderer::_read_file(const std::string &path, std::string &contents)
     {
@@ -71,9 +66,9 @@ namespace PT2
 
         // Triangle Setup
         const float triangle_vertices[] = {
-            -1.f,  -1.f,  0.f,    // bottom left
-            -1.f,  4.f, 0.f,    // top left
-            4.f, -1.0f,  0.f,    // bottom right
+            -1.f, -1.f,  0.f,    // bottom left
+            -1.f, 4.f,   0.f,    // top left
+            4.f,  -1.0f, 0.f,    // bottom right
         };
         // Vertex buffer object
         unsigned int VBO;
@@ -131,15 +126,23 @@ namespace PT2
         glLinkProgram(program);
         glUseProgram(program);
 
+        // Update the rendering context
+        _rendering_context.gl_program         = program;
+        _rendering_context.gl_fragment_shader = fragment_shader;
+        _rendering_context.gl_vertex_shader   = vertex_shader;
+        _rendering_context.resolution_x       = mode->width;
+        _rendering_context.resolution_y       = mode->height;
+
         // Setup the texture for displaying the result of the ray tracing buffer
         GLuint texture = 0;
 
-        glGenTextures( 1, &texture);
+        glGenTextures(1, &texture);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
-        int   width, height, components;
+        int width, height, components;
         stbi_set_flip_vertically_on_load(true);
-        auto *data = stbi_load("./assets/images/background_test.jpeg", &width, &height, &components, 3);
+        auto *data =
+          stbi_load("./assets/images/background_test.jpeg", &width, &height, &components, 3);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -166,49 +169,56 @@ namespace PT2
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
 
-            static float f       = 0.0f;
-            static int   counter = 0;
-
-            ImGui::Begin(
-              "Hello, world!");    // Create a window called "Hello, world!" and append into it.
-
-            ImGui::Text("This is some useful text.");    // Display some text (you can use a format
-            // strings too)
-
-            ImGui::SliderFloat(
-              "float",
-              &f,
-              0.0f,
-              1.0f);    // Edit 1 float using a slider from 0.0f to 1.0f
-            //            ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats
-            //            representing a color
-
-            if (ImGui::Button("Button"))    // Buttons return true when clicked (most widgets return
-                // true when edited/activated)
-                counter++;
-            ImGui::SameLine();
-            ImGui::Text("counter = %d", counter);
-
-            ImGui::Text(
-              "Application average %.3f ms/frame (%.1f FPS)",
-              1000.0f / ImGui::GetIO().Framerate,
-              ImGui::GetIO().Framerate);
+            ImGui::Begin("Display Options");
+            ImGui::Text("Texture Display Offset");
+            ImGui::SliderFloat("Pos X", &_render_target_setting.x_offset, 0.0f, 1.0f);
+            ImGui::SliderFloat("Pos Y", &_render_target_setting.y_offset, 0.0f, 1.0f);
+            ImGui::SliderFloat("Scale X", &_render_target_setting.x_scale, 0.0f, 1.0f);
+            ImGui::SliderFloat("Scale Y", &_render_target_setting.y_scale, 0.0f, 1.0f);
             ImGui::End();
-            ImGui::Render();
+
             glUseProgram(program);
             glClearColor(0.7, 0.7, 0.7, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
+
+            _update_uniforms();
 
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture);
 
             glBindVertexArray(VAO);
             glDrawArrays(GL_TRIANGLES, 0, 3);
+            ImGui::Render();
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
             glfwSwapBuffers(_window);
         }
         glfwTerminate();
+    }
+
+    void Renderer::_update_uniforms() const
+    {
+        // Update the texture offset uniforms
+        glUniform1f(
+          glGetUniformLocation(_rendering_context.gl_program, "x_offset"),
+          -_render_target_setting.x_offset);    // 1 - x is added to make it feel more natural
+        glUniform1f(
+          glGetUniformLocation(_rendering_context.gl_program, "y_offset"),
+          -_render_target_setting.y_offset);
+        glUniform1f(
+            glGetUniformLocation(_rendering_context.gl_program, "x_scale"),
+          _render_target_setting.x_scale);
+        glUniform1f(
+          glGetUniformLocation(_rendering_context.gl_program, "y_scale"),
+          _render_target_setting.y_scale);
+
+        glUniform1ui(
+          glGetUniformLocation(_rendering_context.gl_program, "screen_width"),
+          _rendering_context.resolution_x);
+
+        glUniform1ui(
+          glGetUniformLocation(_rendering_context.gl_program, "screen_height"),
+          _rendering_context.resolution_y);
     }
 
     void Renderer::submit_detail(const RenderDetail &detail) { }
