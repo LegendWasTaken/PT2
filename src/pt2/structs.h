@@ -90,7 +90,12 @@ namespace PT2
             this->center     = location + w;
         }
 
-        [[nodiscard]] Ray get_ray(float x, float) const noexcept { }
+        [[nodiscard]] Ray get_ray(float x, float y) const noexcept {
+            const auto x_offset  = horizontal * (x * 2.f - 1);
+            const auto y_offset  = vertical * (y * 2.f - 1);
+            const auto direction = glm::normalize((center + x_offset + y_offset) - location);
+            return Ray(location, direction);
+        }
 
     private:
         glm::vec3 horizontal{};

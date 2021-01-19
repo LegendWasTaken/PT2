@@ -5,6 +5,8 @@
 #include <vector>
 #include <string>
 #include <optional>
+#include <queue>
+#include <mutex>
 
 #include <pt2/structs.h>
 
@@ -32,24 +34,31 @@ namespace PT2
         void load_model(const std::string &model, ModelType model_type);
 
     private:
-
         static void _read_file(const std::string &path, std::string &contents);
 
         void _handle_window();
 
         void _update_uniforms() const;
 
-        struct RenderTargetSettings
-        {
-            float x_offset = 0.f;
-            float y_offset = 0.f;
-            float x_scale = 1.0f;
-            float y_scale = 1.0f;
-        } _render_target_setting;
+        void _render_screen();
+
+        void _render_chunk();
+
+        [[nodiscard]] std::optional<std::pair<uint16_t, uint16_t>> _next_tile_to_render();
 
         RenderDetail current_render_detail;
 
         GLFWwindow *_window;
+
+        std::mutex _tile_mutex;
+
+        struct RenderTargetSettings
+        {
+            float x_offset = 0.f;
+            float y_offset = 0.f;
+            float x_scale  = .5f;
+            float y_scale  = .50f;
+        } _render_target_setting;
 
         struct
         {
@@ -59,6 +68,25 @@ namespace PT2
             unsigned int resolution_x;
             unsigned int resolution_y;
         } _rendering_context;
+
+        struct
+        {
+            struct
+            {
+                uint16_t x = 512;
+                uint16_t y = 512;
+            } resolution;
+            struct
+            {
+                uint16_t count  = 16;
+                uint16_t x_size = 512 / 16;
+                uint16_t y_size = 512 / 16;
+            } tiles;
+            std::vector<uint8_t>                      buffer;
+            std::queue<std::pair<uint16_t, uint16_t>> next_tiles;
+
+            Camera camera = Camera(glm::vec3(5, 5, 0), glm::vec3(0, 0, 0), 90, 1);
+        } _ray_tracing_context;
     };
 }    // namespace PT2
 

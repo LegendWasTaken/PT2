@@ -2,7 +2,6 @@
 
 #include <random>
 #include <thread>
-#include <mutex>
 #include <memory>
 #include <queue>
 #include <chrono>
@@ -22,6 +21,16 @@
 #include <imgui.h>
 #include <imgui/imgui_impl_glfw.h>
 #include <imgui/imgui_impl_opengl3.h>
+
+namespace
+{
+    [[nodiscard]] float rand_float()
+    {
+        thread_local static std::mt19937                          gen;
+        thread_local static std::uniform_real_distribution<float> dist(0.f, 1.f);
+        return dist(gen);
+    }
+}
 
 namespace PT2
 {
@@ -134,23 +143,29 @@ namespace PT2
         _rendering_context.resolution_y       = mode->height;
 
         // Setup the texture for displaying the result of the ray tracing buffer
+        _ray_tracing_context.buffer.reserve(
+          _ray_tracing_context.resolution.x * _ray_tracing_context.resolution.y * 3);
+
         GLuint texture = 0;
 
         glGenTextures(1, &texture);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
-        int width, height, components;
-        stbi_set_flip_vertically_on_load(true);
-        auto *data =
-          stbi_load("./assets/images/background_test.jpeg", &width, &height, &components, 3);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+        glTexImage2D(
+          GL_TEXTURE_2D,
+          0,
+          GL_RGB,
+          _ray_tracing_context.resolution.x,
+          _ray_tracing_context.resolution.y,
+          0,
+          GL_RGB,
+          GL_UNSIGNED_BYTE,
+          _ray_tracing_context.buffer.data());
         glGenerateMipmap(GL_TEXTURE_2D);
-        if (!data) std::cerr << "Error loading the image" << std::endl;
-        stbi_image_free(data);
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -182,6 +197,18 @@ namespace PT2
             glClear(GL_COLOR_BUFFER_BIT);
 
             _update_uniforms();
+            _render_screen();
+            glTexImage2D(
+              GL_TEXTURE_2D,
+              0,
+              GL_RGB,
+              _ray_tracing_context.resolution.x,
+              _ray_tracing_context.resolution.y,
+              0,
+              GL_RGB,
+              GL_UNSIGNED_BYTE,
+              _ray_tracing_context.buffer.data());
+            glGenerateMipmap(GL_TEXTURE_2D);
 
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture);
@@ -206,7 +233,7 @@ namespace PT2
           glGetUniformLocation(_rendering_context.gl_program, "y_offset"),
           -_render_target_setting.y_offset);
         glUniform1f(
-            glGetUniformLocation(_rendering_context.gl_program, "x_scale"),
+          glGetUniformLocation(_rendering_context.gl_program, "x_scale"),
           _render_target_setting.x_scale);
         glUniform1f(
           glGetUniformLocation(_rendering_context.gl_program, "y_scale"),
@@ -224,6 +251,62 @@ namespace PT2
     void Renderer::submit_detail(const RenderDetail &detail) { }
 
     void Renderer::load_model(const std::string &model, ModelType model_type) { }
+
+    void Renderer::_render_screen()
+    {
+        // Setup the tiles / count
+        // Todo: make the chunk amounts changeable
+        // Setup the tiles to render per scene
+        for (auto i = 0; i <= std::pow(_ray_tracing_context.tiles.count, 2); i++)
+            _ray_tracing_context.next_tiles.emplace(i % 16, i / 16);
+
+//        _ray_tracing_context.next_tiles.emplace(0, 0);
+//        _ray_tracing_context.next_tiles.emplace(0, 1);
+//        _ray_tracing_context.next_tiles.emplace(1, 3);
+
+        // Rendering threads
+        std::vector<std::thread> render_threads;
+        const auto               max_thread_count = std::thread::hardware_concurrency();
+        render_threads.reserve(max_thread_count);
+        for (auto i = 0; i < max_thread_count; i++)
+            render_threads.emplace_back([&]() { _render_chunk(); });
+
+        for (auto i = 0; i < max_thread_count; i++) render_threads[i].join();
+    }
+
+    void Renderer::_render_chunk()
+    {
+        std::optional<std::pair<uint16_t, uint16_t>> next_chunk;
+        while ((next_chunk = _next_tile_to_render()).has_value())
+        {
+            const auto x_max = std::max(next_chunk->first * _ray_tracing_context.tiles.count + _ray_tracing_context.tiles.x_size, (int) _ray_tracing_context.resolution.x);
+            const auto y_max = std::max(next_chunk->second * _ray_tracing_context.tiles.count + _ray_tracing_context.tiles.y_size, (int) _ray_tracing_context.resolution.y);
+
+            for (auto x = next_chunk->first * 16; x < x_max; x++)
+            {
+                for (auto y = next_chunk->second * 16; y < y_max; y++)
+                {
+                    const auto index = (x + y * _ray_tracing_context.resolution.x) * 3;
+                    _ray_tracing_context.buffer[index + 0] = static_cast<uint8_t>(rand_float() * 255.f);
+                    _ray_tracing_context.buffer[index + 1] = static_cast<uint8_t>(rand_float() * 255.f);
+                    _ray_tracing_context.buffer[index + 2] = static_cast<uint8_t>(rand_float() * 255.f);
+                }
+            }
+
+        }
+    }
+
+    std::optional<std::pair<uint16_t, uint16_t>> Renderer::_next_tile_to_render()
+    {
+        std::lock_guard<std::mutex> guard(_tile_mutex);
+        auto                        tile = std::optional<std::pair<uint16_t, uint16_t>>();
+        if (!_ray_tracing_context.next_tiles.empty())
+        {
+            tile = _ray_tracing_context.next_tiles.front();
+            _ray_tracing_context.next_tiles.pop();
+        }
+        return tile;
+    }
 }    // namespace PT2
 
 /*
