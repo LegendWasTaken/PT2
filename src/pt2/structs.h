@@ -5,131 +5,98 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
+#include <cmath>
 
-#include <pt2/vec3.h>
-#include <pt2/structs.h>
+#include <glm/glm.hpp>
 
-namespace pt2
+namespace PT2
 {
-    class Image
+    struct Ray
     {
     public:
-        Image() = delete;
+        Ray(const glm::vec3 &origin, const glm::vec3 &direction)
+            : origin(origin), direction(direction)
+        {
+        }
 
-        Image(int width, int height, const uint8_t *data);
+        [[nodiscard]] glm::vec3 point_at(float t) const noexcept { return origin + direction * t; }
 
-        [[nodiscard]] auto width() const noexcept -> uint32_t;
-
-        [[nodiscard]] auto height() const noexcept -> uint32_t;
-
-        [[nodiscard]] auto get(float u, float v) const noexcept -> uint32_t;
-
-        [[nodiscard]] auto get(uint32_t x, uint32_t y) const noexcept -> uint32_t;
-
-    private:
-        uint32_t              _width;
-        uint32_t              _height;
-        std::vector<uint32_t> _data;
+        glm::vec3 origin;
+        glm::vec3 direction;
     };
 
-    struct SceneRenderDetail
+    struct Material
     {
-        uint8_t  thread_count = 1;
-        uint16_t spp          = 4;
-        uint16_t max_bounces  = 5;
-        uint16_t width        = 512;
-        uint16_t height       = 512;
+    public:
+        enum
+        {
+            DIFFUSE,
+            REFRACTIVE,
+            MIRROR,
+            METAL,
+        } type;
+
+        float reflectiveness = 0.0f;
+        float roughness      = 0.0f;
+        float emission       = 0.0f;
+        float ior            = 0.0f;
+
+        glm::vec3 color = glm::vec3(0.0f, 0.0f, 0.0f);
+    };
+
+    struct RenderDetail
+    {
+    public:
+        uint16_t thread_count      = 1;
+        uint16_t samples_per_pixel = 4;
+        uint16_t min_bounces       = 5;
+        uint16_t width             = 512;
+        uint16_t height            = 512;
         struct
         {
-            Vec3  origin;
-            Vec3  lookat;
-            float fov = 90;
+            glm::vec3 origin  = glm::vec3();
+            glm::vec3 look_at = glm::vec3();
+            float     fov     = 90.f;
         } camera;
-    };
-
-    struct MaterialData
-    {
-        float diffuseness = 1;
-        float glassiness  = 0;
-        float metalness   = 0;
-
-        float roughness      = 0;
-        float reflectiveness = 0;
     };
 
     struct HitRecord
     {
-        Vec3         normal;
-        Vec3         emission;
-        Vec3         albedo;
-        Vec3         intersection_point;
-        float        distance       = std::numeric_limits<float>::min();
-        float        reflectiveness = 0;
-        bool         hit            = false;
-        MaterialData material_data;
+    public:
+        bool      hit          = false;
+        float     distance     = std::numeric_limits<float>::min();
+        Material *hit_material = nullptr;
+        glm::vec3 normal;
+        glm::vec3 intersection_point;
     };
 
-    class AABB
+    struct Camera
     {
     public:
-        AABB();
+        Camera(const glm::vec3 &location, const glm::vec3 &look_at, float fov, float aspect)
+        {
+            const auto theta       = fov * 3.141592f / 180.f;
+            const auto half_height = tanf(theta / 2.f);
+            const auto half_width  = aspect * half_height;
 
-        AABB(Vec3 min, Vec3 max, bool unsafe = false);
+            constexpr auto up = glm::vec3(0, 1, 0);
+            const auto     w  = glm::normalize(look_at - location);
+            const auto     u  = glm::normalize(glm::cross(up, w));
+            const auto     v  = glm::cross(w, u);
 
-        AABB(float min_x, float min_y, float min_z, float max_x, float max_y, float max_z);
+            this->horizontal = u * half_width;
+            this->vertical   = v * half_height;
+            this->location   = location;
+            this->center     = location + w;
+        }
 
-        [[nodiscard]] float operator[](int i) const noexcept;
-
-        [[nodiscard]] Vec3 get_center() const noexcept;
-
-        [[nodiscard]] bool contains(const Vec3 &point) const noexcept;
-
-        [[nodiscard]] float size_x() const noexcept;
-
-        [[nodiscard]] float size_y() const noexcept;
-
-        [[nodiscard]] float size_z() const noexcept;
-
-        void expand(Vec3 to) noexcept;
-
-        void expand(AABB to) noexcept;
-
-        float min_x;
-        float min_y;
-        float min_z;
-        float max_x;
-        float max_y;
-        float max_z;
-    };
-
-    struct Indice
-    {
-        size_t position;
-        size_t normal;
-        size_t texture;
-    };
-
-    class Ray
-    {
-    public:
-        Ray(Vec3 origin, Vec3 direction);
-
-        [[nodiscard]] Vec3 point_at(float T) const noexcept;
-
-        Vec3 origin;
-        Vec3 direction;
-    };
-
-    class Camera
-    {
-    public:
-        Camera(Vec3 location, Vec3 look_at, float fov, float aspect);
-
-        [[nodiscard]] Ray get_ray(float x, float y) const noexcept;
+        [[nodiscard]] Ray get_ray(float x, float) const noexcept { }
 
     private:
-        Vec3 center, vertical, horizontal, location;
+        glm::vec3 horizontal{};
+        glm::vec3 vertical{};
+        glm::vec3 location{};
+        glm::vec3 center{};
     };
 
-}    // namespace pt2
+}    // namespace PT2

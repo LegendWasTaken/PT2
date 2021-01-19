@@ -19,6 +19,204 @@
 
 #include <embree3/rtcore.h>
 
+#include <imgui.h>
+#include <imgui/imgui_impl_glfw.h>
+#include <imgui/imgui_impl_opengl3.h>
+
+namespace PT2
+{
+    void Renderer::start_gui()
+    {
+        std::thread window_thread([&]() { _handle_window(); });
+
+        window_thread.join();
+    }
+
+    void Renderer::_read_file(const std::string &path, std::string &contents)
+    {
+        constexpr auto read_size = std::size_t { 4096 };
+        auto           stream    = std::ifstream { path.data() };
+        stream.exceptions(std::ios_base::badbit);
+
+        auto out = std::string {};
+        auto buf = std::string(read_size, '\0');
+        while (stream.read(&buf[0], read_size)) { out.append(buf, 0, stream.gcount()); }
+        out.append(buf, 0, stream.gcount());
+        contents = out;
+    }
+
+    void Renderer::_handle_window()
+    {
+        // GLFW - Initialize / Configre
+        glfwInit();
+
+        // GLFW - Window creation
+        const auto mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
+        _window = glfwCreateWindow(mode->width, mode->height, "PT2 - Rewrite", nullptr, nullptr);
+        if (!_window)
+        {
+            std::cerr << "Failed to create window" << std::endl;
+            glfwTerminate();
+            exit(-1);
+        }
+        glfwMakeContextCurrent(_window);
+
+        // Glad - Load function pointers
+        const auto res = gladLoadGLLoader((GLADloadproc) glfwGetProcAddress);
+        if (!res)
+        {
+            std::cerr << "Failed to initialize GLAD" << std::endl;
+            exit(-1);
+        }
+
+        // Triangle Setup
+        const float triangle_vertices[] = {
+            -1.f,  -1.f,  0.f,    // bottom left
+            -1.f,  4.f, 0.f,    // top left
+            4.f, -1.0f,  0.f,    // bottom right
+        };
+        // Vertex buffer object
+        unsigned int VBO;
+        glCreateBuffers(1, &VBO);
+        glNamedBufferStorage(
+          VBO,
+          sizeof(triangle_vertices),
+          triangle_vertices,
+          GL_DYNAMIC_STORAGE_BIT);
+
+        // Vertex array object
+        unsigned int VAO;
+        glCreateVertexArrays(1, &VAO);
+        GLuint vao_binding_point = 0;
+        glVertexArrayVertexBuffer(VAO, vao_binding_point, VBO, 0, 3 * sizeof(float));
+        glEnableVertexArrayAttrib(VAO, 0);
+        glVertexArrayAttribFormat(VAO, 0, 3, GL_FLOAT, false, 0);
+        glVertexArrayAttribBinding(VAO, 0, vao_binding_point);
+
+        // Shaders
+        std::string frag_shader;
+        _read_file("./assets/shaders/shader.frag", frag_shader);
+        GLuint fragment_shader;
+        fragment_shader      = glCreateShader(GL_FRAGMENT_SHADER);
+        const auto *frag_ptr = frag_shader.c_str();
+        glShaderSource(fragment_shader, 1, &frag_ptr, nullptr);
+        glCompileShader(fragment_shader);
+        int params = -1;
+        glGetShaderiv(fragment_shader, GL_COMPILE_STATUS, &params);
+        if (GL_TRUE != params)
+        {
+            std::cerr << "There was an error compiled the fragment shader" << std::endl;
+            exit(-1);
+        }
+
+        std::string vert_shader;
+        _read_file("./assets/shaders/shader.vert", vert_shader);
+        GLuint vertex_shader;
+        vertex_shader        = glCreateShader(GL_VERTEX_SHADER);
+        const auto *vert_ptr = vert_shader.c_str();
+        glShaderSource(vertex_shader, 1, &vert_ptr, nullptr);
+        glCompileShader(vertex_shader);
+        params = -1;
+        glGetShaderiv(vertex_shader, GL_COMPILE_STATUS, &params);
+        if (GL_TRUE != params)
+        {
+            std::cerr << "There was an error compiled the vertex shader" << std::endl;
+            exit(-1);
+        }
+
+        // Program setup
+        GLuint program = glCreateProgram();
+        glAttachShader(program, fragment_shader);
+        glAttachShader(program, vertex_shader);
+        glLinkProgram(program);
+        glUseProgram(program);
+
+        // Setup the texture for displaying the result of the ray tracing buffer
+        GLuint texture = 0;
+
+        glGenTextures( 1, &texture);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        int   width, height, components;
+        stbi_set_flip_vertically_on_load(true);
+        auto *data = stbi_load("./assets/images/background_test.jpeg", &width, &height, &components, 3);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        if (!data) std::cerr << "Error loading the image" << std::endl;
+        stbi_image_free(data);
+
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO &io = ImGui::GetIO();
+        (void) io;
+
+        ImGui::StyleColorsDark();
+
+        ImGui_ImplGlfw_InitForOpenGL(_window, true);
+        ImGui_ImplOpenGL3_Init("#version 150");
+
+        while (!glfwWindowShouldClose(_window))
+        {
+            glfwPollEvents();
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+
+            static float f       = 0.0f;
+            static int   counter = 0;
+
+            ImGui::Begin(
+              "Hello, world!");    // Create a window called "Hello, world!" and append into it.
+
+            ImGui::Text("This is some useful text.");    // Display some text (you can use a format
+            // strings too)
+
+            ImGui::SliderFloat(
+              "float",
+              &f,
+              0.0f,
+              1.0f);    // Edit 1 float using a slider from 0.0f to 1.0f
+            //            ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats
+            //            representing a color
+
+            if (ImGui::Button("Button"))    // Buttons return true when clicked (most widgets return
+                // true when edited/activated)
+                counter++;
+            ImGui::SameLine();
+            ImGui::Text("counter = %d", counter);
+
+            ImGui::Text(
+              "Application average %.3f ms/frame (%.1f FPS)",
+              1000.0f / ImGui::GetIO().Framerate,
+              ImGui::GetIO().Framerate);
+            ImGui::End();
+            ImGui::Render();
+            glUseProgram(program);
+            glClearColor(0.7, 0.7, 0.7, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, texture);
+
+            glBindVertexArray(VAO);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+            glfwSwapBuffers(_window);
+        }
+        glfwTerminate();
+    }
+
+    void Renderer::submit_detail(const RenderDetail &detail) { }
+
+    void Renderer::load_model(const std::string &model, ModelType model_type) { }
+}    // namespace PT2
+
+/*
 namespace pt2
 {
     std::vector<std::pair<std::string, std::string>> models;
@@ -31,7 +229,7 @@ namespace pt2
         thread_local static std::mt19937                          gen;
         thread_local static std::uniform_real_distribution<float> dist(0.f, 1.f);
         return dist(gen);
-    };
+    }
 
     uint32_t load_image(std::string_view image_name)
     {
@@ -70,26 +268,33 @@ namespace pt2
         bool     left     = false;
         bool     down     = false;
         uint16_t distance = 1;
-        for (auto i = 0; i < 16; i++)
-            for (auto j = 0; j < 16; j++) work_queue.emplace(j, i);
-        work_queue.emplace(15, 15);
+        //        for (auto i = 0; i < 16; i++)
+        //            for (auto j = 0; j < 16; j++) work_queue.emplace(j, i);
+        //        work_queue.emplace(15, 15);
 
         // Todo: Fix this, bcuz its really cool and worth it
 
-        //        while (work_queue.size() < 16 * 16) {
-        //            for (int i = 0; i < distance; i++) {
-        //                coord.first += down ? -1 : 1;
-        //                work_queue.emplace(coord);
-        //            }
-        //            down = !down;
-        //
-        //            for (int i = 0; i < distance; i++) {
-        //                coord.second += left ? -1 : 1;
-        //                work_queue.emplace(coord);
-        //            }
-        //            left = !left;
-        //            distance++;
-        //        }
+        std::pair<uint16_t, uint16_t> coord;
+        coord.first  = 7;
+        coord.second = 7;
+        work_queue.emplace(coord.first);
+        while (work_queue.size() < 16 * 16)
+        {
+            for (int i = 0; i < distance; i++)
+            {
+                coord.first += down ? -1 : 1;
+                work_queue.emplace(coord);
+            }
+            down = !down;
+
+            for (int i = 0; i < distance; i++)
+            {
+                coord.second += left ? -1 : 1;
+                work_queue.emplace(coord);
+            }
+            left = !left;
+            distance++;
+        }
 
         const auto scene_camera = Camera(
           detail.camera.origin,
@@ -444,6 +649,11 @@ namespace pt2
 
     void process_hit_material(Ray &ray, HitRecord &record)
     {
+        ray.origin            = record.intersection_point + record.normal * 0.01f;
+        ray.direction         = ray.direction.reflect(record.normal);
+        record.reflectiveness = 1.f;
+        return;
+
         auto material_branch = rand();
 
         if (material_branch < record.material_data.diffuseness)
@@ -477,12 +687,14 @@ namespace pt2
              *
              */
 
-            /** GGX NDF
-             *
-             * Equation:
-             * D_ggx(h,a) = a^2 / pi((n*h)^2(a^2-1) + 1)^2
-             *
-             */
+/** GGX NDF
+ *
+ * Equation:
+ * D_ggx(h,a) = a^2 / pi((n*h)^2(a^2-1) + 1)^2
+ *
+ */
+
+/*
             const auto a_sq       = record.material_data.roughness * record.material_data.roughness;
             const auto h          = record.normal.half_unit_from(ray.direction.inv());
             const auto n_dot_h_sq = powf(record.normal.dot(h), 2.f);
@@ -498,13 +710,14 @@ namespace pt2
              * G_0(x,y) = 2(x*y) / x*y + sqrt(a^2 + (1-a^2)(n*l)^2)
              */
 
+/*
             const auto n_dot_l    = record.normal.dot(ray.direction.reflect(record.normal));
             const auto n_dot_l_sq = n_dot_l * n_dot_h_sq;
-            const auto g0_n_l = 2 * n_dot_l / n_dot_l + sqrtf(a_sq + (1-a_sq) * (n_dot_l_sq));
+            const auto g0_n_l     = 2 * n_dot_l / n_dot_l + sqrtf(a_sq + (1 - a_sq) * (n_dot_l_sq));
 
             const auto n_dot_v    = record.normal.dot(ray.direction.inv());
-            const auto n_dot_v_sq  = n_dot_v * n_dot_v;
-            const auto g0_n_v = 2 * n_dot_v / n_dot_v + sqrtf(a_sq + (1-a_sq) * (n_dot_v_sq));
+            const auto n_dot_v_sq = n_dot_v * n_dot_v;
+            const auto g0_n_v     = 2 * n_dot_v / n_dot_v + sqrtf(a_sq + (1 - a_sq) * (n_dot_v_sq));
 
             const auto g_ggx = g0_n_l * g0_n_v;
 
@@ -514,9 +727,10 @@ namespace pt2
              * F_schlick(v,h,f_0) = f0 + (1 - f0)(1 - v*h)^5
              *
              */
-            constexpr auto f0 = 1.5f;
-            const auto f = powf(1.f - h.dot(record.normal), 5.f);
-            const auto f_schlick = f0 + (1 - f0) * f;
+/*
+            constexpr auto f0        = 1.5f;
+            const auto     f         = powf(1.f - h.dot(record.normal), 5.f);
+            const auto     f_schlick = f0 + (1 - f0) * f;
 
             const auto brdf = d_ggx * g_ggx * f_schlick / 4 * n_dot_v * n_dot_l;
 
@@ -721,3 +935,4 @@ namespace pt2
         return _data[x % _width + y % _height * _width];
     }
 }    // namespace pt2
+*/

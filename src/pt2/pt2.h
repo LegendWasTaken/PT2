@@ -1,17 +1,52 @@
 #pragma once
 
-#if __has_include(<GLFW/glfw3.h>)
-#define PT2_GLFW
-#include <GLFW/glfw3.h>
-#endif
-
 #include <memory>
+
 #include <vector>
 #include <string>
+#include <optional>
 
 #include <pt2/structs.h>
-#include <pt2/vec3.h>
 
+#include <glad/glad.h>
+#include <GLFW/glfw3.h>
+#include <glm/vec3.hpp>
+
+namespace PT2
+{
+    enum class ModelType
+    {
+        OBJ
+    };
+
+    class Renderer
+    {
+    public:
+        Renderer() = default;
+
+        void start_gui();
+
+        void submit_detail(const RenderDetail &detail);
+
+        void load_model(const std::string &model, ModelType model_type);
+
+    private:
+
+        void _read_file(const std::string &path, std::string &contents);
+
+        void _handle_window();
+
+        RenderDetail current_render_detail;
+
+        GLFWwindow *_window;
+
+        std::vector<PT2::Material> materials;
+        std::vector<glm::vec3>     vertices;
+        std::vector<uint32_t>      indices;
+    };
+}    // namespace PT2
+
+/*
 namespace pt2
 {
     constexpr uint32_t INVALID_HANDLE   = std::numeric_limits<uint32_t>::max();
@@ -25,10 +60,5 @@ namespace pt2
 
     [[maybe_unused]] void set_skybox(uint32_t image_handle);
 
-#ifdef PT2_GLFW
-
-    void render_and_display_scene(SceneRenderDetail detail);
-
-#endif
-
 }    // namespace pt2
+*/
