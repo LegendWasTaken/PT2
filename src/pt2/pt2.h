@@ -7,6 +7,9 @@
 #include <optional>
 #include <queue>
 #include <mutex>
+#include <thread>
+#include <shared_mutex>
+#include <embree3/rtcore.h>
 
 #include <pt2/structs.h>
 
@@ -25,7 +28,9 @@ namespace PT2
     class Renderer
     {
     public:
-        Renderer() = default;
+        Renderer();
+
+        ~Renderer();
 
         void start_gui();
 
@@ -42,51 +47,37 @@ namespace PT2
 
         void _render_screen();
 
-        void _render_chunk();
+        void _render_task();
+
+        [[noreturn]] void _render_thread_task();
+
+        void _initialize();
+
+        [[nodiscard]] Ray _process_hit(const HitRecord &record, const Ray &ray) const;
+
+        [[nodiscard]] HitRecord _intersect_scene(const Ray &ray) const;
 
         [[nodiscard]] std::optional<std::pair<uint16_t, uint16_t>> _next_tile_to_render();
-
-        RenderDetail current_render_detail;
 
         GLFWwindow *_window;
 
         std::mutex _tile_mutex;
+        std::atomic<bool> _is_rendering = false;
+        std::atomic<bool> _updating_scene = false;
 
-        struct RenderTargetSettings
-        {
-            float x_offset = 0.f;
-            float y_offset = 0.f;
-            float x_scale  = .5f;
-            float y_scale  = .50f;
-        } _render_target_setting;
+        RenderTargetSettings _render_target_setting;
+        RayTracingContext    _ray_tracing_context;
+        RenderingContext     _rendering_context;
+        RenderDetail         _render_detail;
 
-        struct
-        {
-            unsigned int gl_program;
-            unsigned int gl_fragment_shader;
-            unsigned int gl_vertex_shader;
-            unsigned int resolution_x;
-            unsigned int resolution_y;
-        } _rendering_context;
+        RTCScene    _scene;
+        RTCDevice   _device;
+        RTCGeometry _geometry;
 
-        struct
-        {
-            struct
-            {
-                uint16_t x = 512;
-                uint16_t y = 512;
-            } resolution;
-            struct
-            {
-                uint16_t count  = 16;
-                uint16_t x_size = 512 / 16;
-                uint16_t y_size = 512 / 16;
-            } tiles;
-            std::vector<uint8_t>                      buffer;
-            std::queue<std::pair<uint16_t, uint16_t>> next_tiles;
+        std::vector<glm::vec3> _vertices;
+        std::vector<uint32_t> _indices;
+        std::vector<std::thread> _render_threads;
 
-            Camera camera = Camera(glm::vec3(5, 5, 0), glm::vec3(0, 0, 0), 90, 1);
-        } _ray_tracing_context;
     };
 }    // namespace PT2
 

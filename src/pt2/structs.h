@@ -44,14 +44,29 @@ namespace PT2
         glm::vec3 color = glm::vec3(0.0f, 0.0f, 0.0f);
     };
 
+    struct RenderTargetSettings
+    {
+        float x_offset = 0.f;
+        float y_offset = 0.f;
+        float x_scale  = .5f;
+        float y_scale  = .50f;
+    };
+
+    struct RenderingContext
+    {
+        unsigned int gl_program;
+        unsigned int gl_fragment_shader;
+        unsigned int gl_vertex_shader;
+        unsigned int resolution_x;
+        unsigned int resolution_y;
+    };
+
     struct RenderDetail
     {
     public:
         uint16_t thread_count      = 1;
         uint16_t samples_per_pixel = 4;
         uint16_t min_bounces       = 5;
-        uint16_t width             = 512;
-        uint16_t height            = 512;
         struct
         {
             glm::vec3 origin  = glm::vec3();
@@ -102,6 +117,25 @@ namespace PT2
         glm::vec3 vertical{};
         glm::vec3 location{};
         glm::vec3 center{};
+    };
+
+    struct RayTracingContext
+    {
+        struct
+        {
+            uint16_t x = 512;
+            uint16_t y = 512;
+        } resolution;
+        struct
+        {
+            uint16_t count  = 16;
+            uint16_t x_size = 512 / 16;
+            uint16_t y_size = 512 / 16;
+        } tiles;
+        std::vector<uint8_t>                      buffer;
+        std::queue<std::pair<uint16_t, uint16_t>> next_tiles;
+
+        Camera camera = Camera(glm::vec3(2, 2, 0), glm::vec3(0, 0, 0), 90, 1);
     };
 
 }    // namespace PT2

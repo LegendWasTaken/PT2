@@ -4,7 +4,8 @@ int main()
 {
 
     auto renderer = PT2::Renderer();
-    renderer.start_gui();
+    renderer.load_model("./assets/models/rabbit.obj", PT2::ModelType::OBJ);
+        renderer.start_gui();
 
 /*
     //    pt2::load_model("../assets/models/1967-shelby-ford-mustang.obj");

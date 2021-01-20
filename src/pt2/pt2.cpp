@@ -1,7 +1,6 @@
 #include <pt2/pt2.h>
 
 #include <random>
-#include <thread>
 #include <memory>
 #include <queue>
 #include <chrono>
@@ -22,6 +21,8 @@
 #include <imgui/imgui_impl_glfw.h>
 #include <imgui/imgui_impl_opengl3.h>
 
+#include <pt2/imgui_custom.h>
+
 namespace
 {
     [[nodiscard]] float rand_float()
@@ -30,11 +31,47 @@ namespace
         thread_local static std::uniform_real_distribution<float> dist(0.f, 1.f);
         return dist(gen);
     }
-}
+}    // namespace
 
 namespace PT2
 {
+    Renderer::Renderer() { _initialize(); }
+
+    Renderer::~Renderer()
+    {
+        _is_rendering = false;
+        for (auto i = 0; i < _render_threads.size(); i++)
+            _render_threads[i].join();
+    }
+
     void Renderer::start_gui() { _handle_window(); }
+
+    void Renderer::_initialize()
+    {
+        _device   = rtcNewDevice(nullptr);
+        _scene    = rtcNewScene(_device);
+        _geometry = rtcNewGeometry(_device, RTC_GEOMETRY_TYPE_TRIANGLE);
+        rtcCommitGeometry(_geometry);
+        rtcAttachGeometry(_scene, _geometry);
+        rtcCommitScene(_scene);
+
+        // Rendering threads
+        const auto max_thread_count = std::thread::hardware_concurrency();
+        _render_threads.reserve(max_thread_count);
+        for (auto i = 0; i < max_thread_count; i++)
+            _render_threads.emplace_back([&]() { _render_thread_task(); });
+    }
+
+    [[noreturn]] void Renderer::_render_thread_task()
+    {
+        while (true)
+        {
+            if (_updating_scene && _is_rendering)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            else
+                _render_task();
+        }
+    }
 
     void Renderer::_read_file(const std::string &path, std::string &contents)
     {
@@ -192,6 +229,11 @@ namespace PT2
             ImGui::SliderFloat("Scale Y", &_render_target_setting.y_scale, 0.0f, 1.0f);
             ImGui::End();
 
+            ImGui::Begin("Ray Tracing");
+            static bool enable_tmp_acc = false;
+            ImGui::Checkbox("Temporal Accumulation", &enable_tmp_acc);
+            ImGui::End();
+
             glUseProgram(program);
             glClearColor(0.7, 0.7, 0.7, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
@@ -250,7 +292,81 @@ namespace PT2
 
     void Renderer::submit_detail(const RenderDetail &detail) { }
 
-    void Renderer::load_model(const std::string &model, ModelType model_type) { }
+    void Renderer::load_model(const std::string &model, ModelType model_type)
+    {
+        if (model_type == ModelType::OBJ)
+        {
+            tinyobj::attrib_t                attrib;
+            std::vector<tinyobj::shape_t>    shapes;
+            std::vector<tinyobj::material_t> materials;
+            std::string                      warn;
+            std::string                      err;
+            const auto                       ret = tinyobj::LoadObj(
+              &attrib,
+              &shapes,
+              &materials,
+              &warn,
+              &err,
+              model.c_str(),
+              nullptr,
+              true);
+
+            if (!warn.empty()) std::cout << warn << std::endl;
+            if (!err.empty()) std::cerr << err << std::endl;
+            if (!ret) exit(-1);
+
+            if (attrib.vertices.size() % 3 != 0)
+            {
+                std::cerr << "Bad model lol" << std::endl;
+                exit(-1);
+            }
+            const auto vertex_count = attrib.vertices.size() / 3;
+            _vertices.reserve(vertex_count);
+            for (auto i = 0; i < attrib.vertices.size(); i += 3)
+            {
+                _vertices.emplace_back(
+                  attrib.vertices[i + 0],
+                  attrib.vertices[i + 1],
+                  attrib.vertices[i + 2]);
+            }
+
+            for (const auto &shape : shapes)
+            {
+                _indices.reserve(shape.mesh.indices.size());
+                for (const auto idx : shape.mesh.indices) _indices.push_back(idx.vertex_index);
+            }
+        }
+
+        // Once we're done loading the model into our indices / vertices / Todo: materials
+        // We rebuild the scene
+        auto *vertices = (float *) rtcSetNewGeometryBuffer(
+          _geometry,
+          RTC_BUFFER_TYPE_VERTEX,
+          0,
+          RTC_FORMAT_FLOAT3,
+          3 * sizeof(float),
+          _vertices.size());
+
+        auto *indices = (unsigned *) rtcSetNewGeometryBuffer(
+          _geometry,
+          RTC_BUFFER_TYPE_INDEX,
+          0,
+          RTC_FORMAT_UINT3,
+          3 * sizeof(unsigned),
+          _indices.size());
+
+        if (vertices != nullptr)
+            std::memcpy(vertices, _vertices.data(), sizeof(glm::vec3) * _vertices.size());
+
+        if (indices != nullptr)
+            std::memcpy(indices, _indices.data(), sizeof(uint32_t) * _indices.size());
+
+        _updating_scene = true;
+        rtcCommitGeometry(_geometry);
+        rtcAttachGeometry(_scene, _geometry);
+        rtcCommitScene(_scene);
+        _updating_scene = false;
+    }
 
     void Renderer::_render_screen()
     {
@@ -259,40 +375,105 @@ namespace PT2
         // Setup the tiles to render per scene
         for (auto i = 0; i <= std::pow(_ray_tracing_context.tiles.count, 2); i++)
             _ray_tracing_context.next_tiles.emplace(i % 16, i / 16);
-
-//        _ray_tracing_context.next_tiles.emplace(0, 0);
-//        _ray_tracing_context.next_tiles.emplace(0, 1);
-//        _ray_tracing_context.next_tiles.emplace(1, 3);
-
-        // Rendering threads
-        std::vector<std::thread> render_threads;
-        const auto               max_thread_count = std::thread::hardware_concurrency();
-        render_threads.reserve(max_thread_count);
-        for (auto i = 0; i < max_thread_count; i++)
-            render_threads.emplace_back([&]() { _render_chunk(); });
-
-        for (auto i = 0; i < max_thread_count; i++) render_threads[i].join();
     }
 
-    void Renderer::_render_chunk()
+    HitRecord Renderer::_intersect_scene(const Ray &ray) const
+    {
+        auto ctx = RTCIntersectContext();
+        rtcInitIntersectContext(&ctx);
+        auto best             = HitRecord();
+        auto ray_hit          = RTCRayHit();
+        ray_hit.ray.org_x     = ray.origin.x;
+        ray_hit.ray.org_y     = ray.origin.y;
+        ray_hit.ray.org_z     = ray.origin.z;
+        ray_hit.ray.dir_x     = ray.direction.x;
+        ray_hit.ray.dir_y     = ray.direction.y;
+        ray_hit.ray.dir_z     = ray.direction.z;
+        ray_hit.ray.tnear     = 0.f;
+        ray_hit.ray.tfar      = std::numeric_limits<float>::infinity();
+        ray_hit.ray.mask      = -1;
+        ray_hit.hit.geomID    = RTC_INVALID_GEOMETRY_ID;
+        ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
+
+        rtcIntersect1(_scene, &ctx, &ray_hit);
+
+        if (ray_hit.hit.geomID != RTC_INVALID_GEOMETRY_ID)
+        {
+            best.hit                = true;
+            best.distance           = ray_hit.ray.tfar;
+            best.intersection_point = ray.point_at(ray_hit.ray.tfar);
+            best.normal =
+              glm::normalize(glm::vec3(ray_hit.hit.Ng_x, ray_hit.hit.Ng_y, ray_hit.hit.Ng_z));
+        }
+
+        return best;
+    }
+
+    Ray Renderer::_process_hit(const HitRecord &record, const Ray &ray) const
+    {
+        auto new_ray      = ray;
+        new_ray.direction = glm::reflect(ray.direction, record.normal);
+        new_ray.origin    = record.intersection_point + record.normal * 0.01f;
+        return new_ray;
+    }
+
+    void Renderer::_render_task()
     {
         std::optional<std::pair<uint16_t, uint16_t>> next_chunk;
         while ((next_chunk = _next_tile_to_render()).has_value())
         {
-            const auto x_max = std::max(next_chunk->first * _ray_tracing_context.tiles.count + _ray_tracing_context.tiles.x_size, (int) _ray_tracing_context.resolution.x);
-            const auto y_max = std::max(next_chunk->second * _ray_tracing_context.tiles.count + _ray_tracing_context.tiles.y_size, (int) _ray_tracing_context.resolution.y);
+            const auto x_max = std::max(
+              next_chunk->first * _ray_tracing_context.tiles.count +
+                _ray_tracing_context.tiles.x_size,
+              (int) _ray_tracing_context.resolution.x);
+            const auto y_max = std::max(
+              next_chunk->second * _ray_tracing_context.tiles.count +
+                _ray_tracing_context.tiles.y_size,
+              (int) _ray_tracing_context.resolution.y);
 
             for (auto x = next_chunk->first * 16; x < x_max; x++)
             {
                 for (auto y = next_chunk->second * 16; y < y_max; y++)
                 {
+                    auto ray = _ray_tracing_context.camera.get_ray(
+                      (float) x / _ray_tracing_context.resolution.x,
+                      (float) y / _ray_tracing_context.resolution.y);
+                    auto throughput = glm::vec3(1, 1, 1);
+                    auto final      = glm::vec3(0, 0, 0);
+
+                    for (auto bounce = 0; bounce < _render_detail.min_bounces; bounce++)
+                    {
+                        auto current = _intersect_scene(ray);
+
+                        if (!current.hit)
+                        {
+                            // We didn't intersect anything, so lets get the skybox colour and dip
+                            // out of here.
+                            const auto skybox_uv = glm::vec2(
+                              0.5f + atan2f(ray.direction.z, ray.direction.x) / 2 * 3.1415,
+                              0.5f - asinf(ray.direction.y) / 3.1415);
+
+                            const auto blue  = glm::vec3(0.4, 0.4, 1.0);
+                            const auto white = glm::vec3(1, 1, 1);
+
+                            const auto out = glm::mix(white, blue, skybox_uv.y);
+                            final += throughput * out;
+                            break;
+                        }
+                        else
+                        {
+                            ray = _process_hit(current, ray);
+                            final += throughput;
+                            throughput *= glm::vec3(1, 1, 1) * .2f;
+                        }
+                    }
+
                     const auto index = (x + y * _ray_tracing_context.resolution.x) * 3;
-                    _ray_tracing_context.buffer[index + 0] = static_cast<uint8_t>(rand_float() * 255.f);
-                    _ray_tracing_context.buffer[index + 1] = static_cast<uint8_t>(rand_float() * 255.f);
-                    _ray_tracing_context.buffer[index + 2] = static_cast<uint8_t>(rand_float() * 255.f);
+                    _ray_tracing_context.buffer[index + 0] = static_cast<uint8_t>(final.x * 255.f);
+                    _ray_tracing_context.buffer[index + 1] = static_cast<uint8_t>(final.y * 255.f);
+                    _ray_tracing_context.buffer[index + 2] = static_cast<uint8_t>(final.z * 255.f);
                 }
             }
-
         }
     }
 
