@@ -35,14 +35,9 @@ namespace
 
 namespace PT2
 {
-    Renderer::Renderer() { _initialize(); }
+    Renderer::Renderer() : _render_pool(16) { _initialize(); }
 
-    Renderer::~Renderer()
-    {
-        _is_rendering = false;
-        for (auto i = 0; i < _render_threads.size(); i++)
-            _render_threads[i].join();
-    }
+    Renderer::~Renderer() = default;
 
     void Renderer::start_gui() { _handle_window(); }
 
@@ -54,23 +49,6 @@ namespace PT2
         rtcCommitGeometry(_geometry);
         rtcAttachGeometry(_scene, _geometry);
         rtcCommitScene(_scene);
-
-        // Rendering threads
-        const auto max_thread_count = std::thread::hardware_concurrency();
-        _render_threads.reserve(max_thread_count);
-        for (auto i = 0; i < max_thread_count; i++)
-            _render_threads.emplace_back([&]() { _render_thread_task(); });
-    }
-
-    [[noreturn]] void Renderer::_render_thread_task()
-    {
-        while (true)
-        {
-            if (_updating_scene && _is_rendering)
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            else
-                _render_task();
-        }
     }
 
     void Renderer::_read_file(const std::string &path, std::string &contents)
@@ -214,6 +192,7 @@ namespace PT2
         ImGui_ImplGlfw_InitForOpenGL(_window, true);
         ImGui_ImplOpenGL3_Init("#version 150");
 
+        _render_screen();
         while (!glfwWindowShouldClose(_window))
         {
             glfwPollEvents();
@@ -221,25 +200,126 @@ namespace PT2
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
 
-            ImGui::Begin("Display Options");
-            ImGui::Text("Texture Display Offset");
-            ImGui::SliderFloat("Pos X", &_render_target_setting.x_offset, 0.0f, 1.0f);
-            ImGui::SliderFloat("Pos Y", &_render_target_setting.y_offset, 0.0f, 1.0f);
-            ImGui::SliderFloat("Scale X", &_render_target_setting.x_scale, 0.0f, 1.0f);
-            ImGui::SliderFloat("Scale Y", &_render_target_setting.y_scale, 0.0f, 1.0f);
-            ImGui::End();
+            {
+                ImGui::Begin("Display Options");
+                ImGui::Text("Texture Display Offset");
+                ImGui::SliderFloat("Pos X", &_render_target_setting.x_offset, 0.0f, 1.0f);
+                ImGui::SliderFloat("Pos Y", &_render_target_setting.y_offset, 0.0f, 1.0f);
+                ImGui::SliderFloat("Scale X", &_render_target_setting.x_scale, 0.0f, 1.0f);
+                ImGui::SliderFloat("Scale Y", &_render_target_setting.y_scale, 0.0f, 1.0f);
+                ImGui::End();
+            }
 
-            ImGui::Begin("Ray Tracing");
-            static bool enable_tmp_acc = false;
-            ImGui::Checkbox("Temporal Accumulation", &enable_tmp_acc);
-            ImGui::End();
+            {
+                ImGui::Begin("Envmap Loader");
+                static std::filesystem::path selectedImage;
+                static bool                  idk;
+                if (ImGui::BeginCombo("Selected Image", selectedImage.filename().c_str()))
+                {
+                    for (const auto &directory_entry :
+                         std::filesystem::directory_iterator("./assets/images"))
+                    {
+                        if (directory_entry.is_regular_file())
+                        {
+                            const auto selected =
+                              ImGui::Selectable(directory_entry.path().filename().c_str(), &idk);
+                            if (selected) selectedImage = directory_entry.path();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+
+                if (ImGui::Button("Load Background") && selectedImage != std::filesystem::path())
+                {
+                    int   width, height, components;
+                    auto *data = stbi_load(selectedImage.c_str(), &width, &height, &components, 3);
+                    _envmap    = Image();
+                    _envmap->data = std::vector<uint8_t>();
+                    _envmap->data.resize(width * height * 3, 0);
+                    std::memcpy(_envmap->data.data(), data, width * height * 3);
+                    _envmap->width  = width;
+                    _envmap->height = height;
+                    stbi_image_free(data);
+                    _render_pool.stop();
+                    _render_pool.start();
+                    _render_screen();
+                }
+                ImGui::End();
+            }
+
+            {
+                ImGui::Begin("Model Loader");
+                static std::filesystem::path selectedModel;
+                static bool                  idk;
+                if (ImGui::BeginCombo("Selected Model", selectedModel.filename().c_str()))
+                {
+                    for (const auto &directory_entry :
+                         std::filesystem::directory_iterator("./assets/models"))
+                    {
+                        if (directory_entry.is_regular_file())
+                        {
+                            const auto selected =
+                              ImGui::Selectable(directory_entry.path().filename().c_str(), &idk);
+                            if (selected) selectedModel = directory_entry.path();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+
+                if (ImGui::Button("Add Model") && selectedModel != std::filesystem::path())
+                {
+                    load_model(selectedModel, ModelType::OBJ);
+                    _render_pool.stop();
+                    _render_pool.start();
+                    _render_screen();
+                }
+                ImGui::End();
+            }
+
+            {
+                static auto ctx             = RayTracingContext();
+                static auto camera_position = glm::vec3(2, 2, 2);
+                static auto camera_look_at  = glm::vec3(0, 0, 0);
+                static auto fov             = 90.f;
+
+                ImGui::Begin("Rendering Context");
+                ImGui::InputInt("Max Bounces", &ctx.bounces, 1, 5);
+                ImGui::InputInt("Samples Per Pixel", &ctx.spp, 1, 2);
+                ImGui::SliderInt("Res X", &ctx.resolution.x, 128, 2000);
+                ImGui::SliderInt("Res Y", &ctx.resolution.y, 128, 2000);
+                if (ctx.resolution.x % 2 != 0) ctx.resolution.x--;
+                if (ctx.resolution.y % 2 != 0) ctx.resolution.y--;
+                ImGui::SliderInt("Tile Count", &ctx.tiles.count, 4, 32);
+                ImGui::InputFloat3("Position", &camera_position[0]);
+                ImGui::InputFloat3("Look At", &camera_look_at[0]);
+                ImGui::SliderFloat("FOV", &fov, 30, 120);
+                const auto update = ImGui::Button("Re-Render");
+                ImGui::End();
+
+                if (update)
+                {
+                    // Stop the thread pool
+                    _render_pool.stop();
+                    // Update the ray tracing context
+                    ctx.tiles.x_size = ctx.resolution.x / ctx.tiles.count;
+                    ctx.tiles.y_size = ctx.resolution.y / ctx.tiles.count;
+                    ctx.camera       = Camera(
+                      camera_position,
+                      camera_look_at,
+                      fov,
+                      ctx.resolution.x / ((float) ctx.resolution.y));
+                    ctx.buffer.resize(ctx.resolution.x * ctx.resolution.y * 3, 0);
+                    _ray_tracing_context = ctx;
+                    _render_pool.start();
+                    _render_screen();
+                }
+            }
 
             glUseProgram(program);
             glClearColor(0.7, 0.7, 0.7, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
             _update_uniforms();
-            _render_screen();
             glTexImage2D(
               GL_TEXTURE_2D,
               0,
@@ -290,10 +370,10 @@ namespace PT2
           _rendering_context.resolution_y);
     }
 
-    void Renderer::submit_detail(const RenderDetail &detail) { }
-
     void Renderer::load_model(const std::string &model, ModelType model_type)
     {
+        _vertices.clear();
+        _indices.clear();
         if (model_type == ModelType::OBJ)
         {
             tinyobj::attrib_t                attrib;
@@ -361,20 +441,45 @@ namespace PT2
         if (indices != nullptr)
             std::memcpy(indices, _indices.data(), sizeof(uint32_t) * _indices.size());
 
-        _updating_scene = true;
         rtcCommitGeometry(_geometry);
         rtcAttachGeometry(_scene, _geometry);
         rtcCommitScene(_scene);
-        _updating_scene = false;
     }
 
-    void Renderer::_render_screen()
+    void Renderer::_render_screen(uint64_t spp)
     {
-        // Setup the tiles / count
-        // Todo: make the chunk amounts changeable
-        // Setup the tiles to render per scene
-        for (auto i = 0; i <= std::pow(_ray_tracing_context.tiles.count, 2); i++)
-            _ray_tracing_context.next_tiles.emplace(i % 16, i / 16);
+        auto detail = RenderTaskDetail();
+
+        const auto tile_count = _ray_tracing_context.tiles.count;
+
+        std::vector<std::function<void()>> tasks;
+#if 1
+        for (auto i = 0; i < tile_count; i++)
+            for (auto j = 0; j < tile_count; j++)
+            {
+                detail.x = i;
+                detail.y = j;
+
+                tasks.emplace_back([detail, this] { _render_task(detail); });
+            }
+
+        _render_pool.add_tasks(tasks);
+#else
+        bool left        = false;
+        bool down        = false;
+        detail.x         = tile_count / 2;
+        detail.y         = tile_count / 2;
+        auto tasks_added = 0;
+        auto distance    = 1;
+        for (int i = 0; i < tile_count * tile_count; ++i)
+        {
+            _render_pool.add_task([detail, this] { _render_task(detail); });
+            if ((detail.x) <= (detail.y) && (detail.x != detail.y || detail.x >= 0))
+                detail.x += ((detail.y >= 0) ? 1 : -1);
+            else
+                detail.y += ((detail.x >= 0) ? -1 : 1);
+        }
+#endif
     }
 
     HitRecord Renderer::_intersect_scene(const Ray &ray) const
@@ -417,31 +522,29 @@ namespace PT2
         return new_ray;
     }
 
-    void Renderer::_render_task()
+    void Renderer::_render_task(RenderTaskDetail detail)
     {
-        std::optional<std::pair<uint16_t, uint16_t>> next_chunk;
-        while ((next_chunk = _next_tile_to_render()).has_value())
-        {
-            const auto x_max = std::max(
-              next_chunk->first * _ray_tracing_context.tiles.count +
-                _ray_tracing_context.tiles.x_size,
-              (int) _ray_tracing_context.resolution.x);
-            const auto y_max = std::max(
-              next_chunk->second * _ray_tracing_context.tiles.count +
-                _ray_tracing_context.tiles.y_size,
-              (int) _ray_tracing_context.resolution.y);
+        const auto x_max = std::max(
+          detail.x * _ray_tracing_context.tiles.count + _ray_tracing_context.tiles.x_size,
+          (int) _ray_tracing_context.resolution.x);
+        const auto y_max = std::max(
+          detail.y * _ray_tracing_context.tiles.count + _ray_tracing_context.tiles.y_size,
+          (int) _ray_tracing_context.resolution.y);
 
-            for (auto x = next_chunk->first * 16; x < x_max; x++)
+        for (uint64_t x = detail.x * 16; x < x_max; x++)
+        {
+            for (uint64_t y = detail.y * 16; y < y_max; y++)
             {
-                for (auto y = next_chunk->second * 16; y < y_max; y++)
+                auto final_spp = glm::vec3(0, 0, 0);
+                for (auto spp = 0; spp < _ray_tracing_context.spp; spp++)
                 {
                     auto ray = _ray_tracing_context.camera.get_ray(
-                      (float) x / _ray_tracing_context.resolution.x,
-                      (float) y / _ray_tracing_context.resolution.y);
+                      ((float) x + rand_float()) / _ray_tracing_context.resolution.x,
+                      ((float) y + rand_float()) / _ray_tracing_context.resolution.y);
                     auto throughput = glm::vec3(1, 1, 1);
                     auto final      = glm::vec3(0, 0, 0);
 
-                    for (auto bounce = 0; bounce < _render_detail.min_bounces; bounce++)
+                    for (auto bounce = 0; bounce < _ray_tracing_context.bounces; bounce++)
                     {
                         auto current = _intersect_scene(ray);
 
@@ -449,517 +552,518 @@ namespace PT2
                         {
                             // We didn't intersect anything, so lets get the skybox colour and dip
                             // out of here.
-                            const auto skybox_uv = glm::vec2(
-                              0.5f + atan2f(ray.direction.z, ray.direction.x) / 2 * 3.1415,
+                            auto skybox_uv = glm::vec2(
+                              0.5f + atan2f(ray.direction.z, ray.direction.x) / (2 * 3.1415),
                               0.5f - asinf(ray.direction.y) / 3.1415);
 
-                            const auto blue  = glm::vec3(0.4, 0.4, 1.0);
-                            const auto white = glm::vec3(1, 1, 1);
-
-                            const auto out = glm::mix(white, blue, skybox_uv.y);
-                            final += throughput * out;
+                            if (_envmap.has_value())
+                            {
+                                const uint64_t u     = skybox_uv.x * _envmap->width;
+                                const uint64_t v     = skybox_uv.y * _envmap->height;
+                                const auto     index = u + v * _envmap->width;
+                                const auto     out   = glm::vec3(
+                                  _envmap->data[index * 3 + 0] / 255.f,
+                                  _envmap->data[index * 3 + 1] / 255.f,
+                                  _envmap->data[index * 3 + 2] / 255.f);
+                                final += throughput * out;
+                            }
+                            else
+                            {
+                                const auto blue  = glm::vec3(0.4, 0.4, 1.0);
+                                const auto white = glm::vec3(1, 1, 1);
+                                const auto out   = glm::mix(white, blue, skybox_uv.y);
+                                final += throughput * out;
+                            }
                             break;
                         }
                         else
                         {
                             ray = _process_hit(current, ray);
-                            final += throughput;
+                            final += throughput * 0.3f;
                             throughput *= glm::vec3(1, 1, 1) * .2f;
                         }
                     }
-
-                    const auto index = (x + y * _ray_tracing_context.resolution.x) * 3;
-                    _ray_tracing_context.buffer[index + 0] = static_cast<uint8_t>(final.x * 255.f);
-                    _ray_tracing_context.buffer[index + 1] = static_cast<uint8_t>(final.y * 255.f);
-                    _ray_tracing_context.buffer[index + 2] = static_cast<uint8_t>(final.z * 255.f);
+                    final_spp += final;
                 }
+
+                final_spp /= _ray_tracing_context.spp;
+                const auto index = (x + y * _ray_tracing_context.resolution.x) * 3;
+
+                for (auto i = 0; i < 3; i++)
+                { _ray_tracing_context.buffer[index + i] = final_spp[i] * 255.f; }
             }
         }
-    }
-
-    std::optional<std::pair<uint16_t, uint16_t>> Renderer::_next_tile_to_render()
-    {
-        std::lock_guard<std::mutex> guard(_tile_mutex);
-        auto                        tile = std::optional<std::pair<uint16_t, uint16_t>>();
-        if (!_ray_tracing_context.next_tiles.empty())
-        {
-            tile = _ray_tracing_context.next_tiles.front();
-            _ray_tracing_context.next_tiles.pop();
-        }
-        return tile;
     }
 }    // namespace PT2
+     /*
+     namespace pt2
+     {
+         std::vector<std::pair<std::string, std::string>> models;
+         std::vector<pt2::Image>                          loaded_images;
+         uint32_t                                         skybox = pt2::INVALID_HANDLE;
+         HitRecord           intersect_scene(const Ray &ray, RTCScene scene);
+         void                process_hit_material(Ray &ray, HitRecord &record);
+         [[nodiscard]] float rand()
+         {
+             thread_local static std::mt19937                          gen;
+             thread_local static std::uniform_real_distribution<float> dist(0.f, 1.f);
+             return dist(gen);
+         }
 
-/*
-namespace pt2
-{
-    std::vector<std::pair<std::string, std::string>> models;
-    std::vector<pt2::Image>                          loaded_images;
-    uint32_t                                         skybox = pt2::INVALID_HANDLE;
-    HitRecord           intersect_scene(const Ray &ray, RTCScene scene);
-    void                process_hit_material(Ray &ray, HitRecord &record);
-    [[nodiscard]] float rand()
-    {
-        thread_local static std::mt19937                          gen;
-        thread_local static std::uniform_real_distribution<float> dist(0.f, 1.f);
-        return dist(gen);
-    }
+         uint32_t load_image(std::string_view image_name)
+         {
+             int   width, height, components;
+             auto *data = stbi_load(image_name.data(), &width, &height, &components, 3);
+             loaded_images.emplace_back(width, height, data);
+             stbi_image_free(data);
+             return loaded_images.size() - 1;
+         }
 
-    uint32_t load_image(std::string_view image_name)
-    {
-        int   width, height, components;
-        auto *data = stbi_load(image_name.data(), &width, &height, &components, 3);
-        loaded_images.emplace_back(width, height, data);
-        stbi_image_free(data);
-        return loaded_images.size() - 1;
-    }
+         void load_model(std::string path, std::string name)
+         {
+             models.emplace_back(std::move(path), std::move(name));
+         }
 
-    void load_model(std::string path, std::string name)
-    {
-        models.emplace_back(std::move(path), std::move(name));
-    }
+         void render_scene(SceneRenderDetail detail, uint32_t *buffer)
+         {
+             // Start of splitting the scene into different areas and work loads for the threads to
+     use std::mutex                                work_access_mutex; std::queue<std::pair<uint16_t,
+     uint16_t>> work_queue;
 
-    void render_scene(SceneRenderDetail detail, uint32_t *buffer)
-    {
-        // Start of splitting the scene into different areas and work loads for the threads to use
-        std::mutex                                work_access_mutex;
-        std::queue<std::pair<uint16_t, uint16_t>> work_queue;
+             const auto next_pixels = [&](std::pair<uint16_t, uint16_t> &vec) {
+                 if (!work_queue.empty())
+                 {
+                     work_access_mutex.lock();
+                     std::swap(vec, work_queue.front());
+                     work_queue.pop();
+                     work_access_mutex.unlock();
+                 }
+                 return !work_queue.empty();
+             };
 
-        const auto next_pixels = [&](std::pair<uint16_t, uint16_t> &vec) {
-            if (!work_queue.empty())
-            {
-                work_access_mutex.lock();
-                std::swap(vec, work_queue.front());
-                work_queue.pop();
-                work_access_mutex.unlock();
-            }
-            return !work_queue.empty();
-        };
+             const auto x_tiles = detail.width / 16;
+             const auto y_tiles = detail.height / 16;
 
-        const auto x_tiles = detail.width / 16;
-        const auto y_tiles = detail.height / 16;
+             bool     left     = false;
+             bool     down     = false;
+             uint16_t distance = 1;
+             //        for (auto i = 0; i < 16; i++)
+             //            for (auto j = 0; j < 16; j++) work_queue.emplace(j, i);
+             //        work_queue.emplace(15, 15);
 
-        bool     left     = false;
-        bool     down     = false;
-        uint16_t distance = 1;
-        //        for (auto i = 0; i < 16; i++)
-        //            for (auto j = 0; j < 16; j++) work_queue.emplace(j, i);
-        //        work_queue.emplace(15, 15);
+             // Todo: Fix this, bcuz its really cool and worth it
 
-        // Todo: Fix this, bcuz its really cool and worth it
+             std::pair<uint16_t, uint16_t> coord;
+             coord.first  = 7;
+             coord.second = 7;
+             work_queue.emplace(coord.first);
+             while (work_queue.size() < 16 * 16)
+             {
+                 for (int i = 0; i < distance; i++)
+                 {
+                     coord.first += down ? -1 : 1;
+                     work_queue.emplace(coord);
+                 }
+                 down = !down;
 
-        std::pair<uint16_t, uint16_t> coord;
-        coord.first  = 7;
-        coord.second = 7;
-        work_queue.emplace(coord.first);
-        while (work_queue.size() < 16 * 16)
-        {
-            for (int i = 0; i < distance; i++)
-            {
-                coord.first += down ? -1 : 1;
-                work_queue.emplace(coord);
-            }
-            down = !down;
+                 for (int i = 0; i < distance; i++)
+                 {
+                     coord.second += left ? -1 : 1;
+                     work_queue.emplace(coord);
+                 }
+                 left = !left;
+                 distance++;
+             }
 
-            for (int i = 0; i < distance; i++)
-            {
-                coord.second += left ? -1 : 1;
-                work_queue.emplace(coord);
-            }
-            left = !left;
-            distance++;
-        }
+             const auto scene_camera = Camera(
+               detail.camera.origin,
+               detail.camera.lookat,
+               60,
+               (float) detail.width / (float) detail.height);
 
-        const auto scene_camera = Camera(
-          detail.camera.origin,
-          detail.camera.lookat,
-          60,
-          (float) detail.width / (float) detail.height);
+             const auto local_skybox = &loaded_images[skybox];
 
-        const auto local_skybox = &loaded_images[skybox];
+             std::vector<Vec3>         emissions;
+             std::vector<Vec3>         vertices;
+             std::vector<Vec3>         normals;
+             std::vector<Vec3>         colours;
+             std::vector<MaterialData> material_data;
+             std::vector<uint32_t>     indices;
 
-        std::vector<Vec3>         emissions;
-        std::vector<Vec3>         vertices;
-        std::vector<Vec3>         normals;
-        std::vector<Vec3>         colours;
-        std::vector<MaterialData> material_data;
-        std::vector<uint32_t>     indices;
+             for (const auto &model_path : models)
+             {
+                 tinyobj::attrib_t                attrib;
+                 std::vector<tinyobj::shape_t>    shapes;
+                 std::vector<tinyobj::material_t> materials;
+                 std::string                      warn;
+                 std::string                      err;
+                 const auto                       model_full_path = model_path.first +
+     model_path.second; const auto                       ret             = tinyobj::LoadObj( &attrib,
+                   &shapes,
+                   &materials,
+                   &warn,
+                   &err,
+                   model_full_path.c_str(),
+                   model_path.first.c_str(),
+                   true);
 
-        for (const auto &model_path : models)
-        {
-            tinyobj::attrib_t                attrib;
-            std::vector<tinyobj::shape_t>    shapes;
-            std::vector<tinyobj::material_t> materials;
-            std::string                      warn;
-            std::string                      err;
-            const auto                       model_full_path = model_path.first + model_path.second;
-            const auto                       ret             = tinyobj::LoadObj(
-              &attrib,
-              &shapes,
-              &materials,
-              &warn,
-              &err,
-              model_full_path.c_str(),
-              model_path.first.c_str(),
-              true);
+                 if (!warn.empty()) std::cout << warn << std::endl;
+                 if (!err.empty()) std::cerr << err << std::endl;
+                 if (!ret) exit(-1);
 
-            if (!warn.empty()) std::cout << warn << std::endl;
-            if (!err.empty()) std::cerr << err << std::endl;
-            if (!ret) exit(-1);
+                 const auto vertex_count = attrib.vertices.size() / 3;
+                 colours.reserve(colours.size() + vertex_count);
+                 indices.reserve(indices.size() + vertex_count);
+                 vertices.reserve(vertices.size() + vertex_count);
+                 emissions.reserve(emissions.size() + vertex_count);
+                 material_data.resize(material_data.size() + vertex_count);
+                 for (auto i = 0; i < attrib.vertices.size(); i += 3)
+                 {
+                     colours.emplace_back(.3, .3, .3);
+                     emissions.emplace_back(0, 0, 0);
+                     vertices.emplace_back(
+                       attrib.vertices[i + 0],
+                       attrib.vertices[i + 1],
+                       attrib.vertices[i + 2]);
+                 }
 
-            const auto vertex_count = attrib.vertices.size() / 3;
-            colours.reserve(colours.size() + vertex_count);
-            indices.reserve(indices.size() + vertex_count);
-            vertices.reserve(vertices.size() + vertex_count);
-            emissions.reserve(emissions.size() + vertex_count);
-            material_data.resize(material_data.size() + vertex_count);
-            for (auto i = 0; i < attrib.vertices.size(); i += 3)
-            {
-                colours.emplace_back(.3, .3, .3);
-                emissions.emplace_back(0, 0, 0);
-                vertices.emplace_back(
-                  attrib.vertices[i + 0],
-                  attrib.vertices[i + 1],
-                  attrib.vertices[i + 2]);
-            }
+                 std::unordered_map<std::string, std::unique_ptr<Image>> loaded_textures;
+                 for (const auto &material : materials)
+                 {
+                     const auto diffuse_name = material.diffuse_texname;
+                     if (!diffuse_name.empty())
+                     {
+                         int   width, height, components;
+                         auto *data = stbi_load(
+                           (model_path.first + diffuse_name).data(),
+                           &width,
+                           &height,
+                           &components,
+                           3);
+                         loaded_textures.insert_or_assign(
+                           diffuse_name,
+                           std::move(std::make_unique<Image>(width, height, data)));
+                         stbi_image_free(data);
+                     }
+                 }
 
-            std::unordered_map<std::string, std::unique_ptr<Image>> loaded_textures;
-            for (const auto &material : materials)
-            {
-                const auto diffuse_name = material.diffuse_texname;
-                if (!diffuse_name.empty())
-                {
-                    int   width, height, components;
-                    auto *data = stbi_load(
-                      (model_path.first + diffuse_name).data(),
-                      &width,
-                      &height,
-                      &components,
-                      3);
-                    loaded_textures.insert_or_assign(
-                      diffuse_name,
-                      std::move(std::make_unique<Image>(width, height, data)));
-                    stbi_image_free(data);
-                }
-            }
+                 for (const auto &shape : shapes)
+                 {
+                     auto index_offset = size_t(0);
+                     for (auto f = 0; f < shape.mesh.num_face_vertices.size(); f++)
+                     {
+                         const auto &vertex     = shape.mesh.num_face_vertices[f];
+                         const auto  mat_exists = materials.size() > shape.mesh.material_ids[f];
+                         const auto &mat        = materials[shape.mesh.material_ids[f]];
+                         const auto &tex        = mat.diffuse_texname;
+                         for (auto v = 0; v < vertex; v++)
+                         {
+                             const auto idx = shape.mesh.indices[index_offset + v];
+                             indices.push_back(idx.vertex_index);
 
-            for (const auto &shape : shapes)
-            {
-                auto index_offset = size_t(0);
-                for (auto f = 0; f < shape.mesh.num_face_vertices.size(); f++)
-                {
-                    const auto &vertex     = shape.mesh.num_face_vertices[f];
-                    const auto  mat_exists = materials.size() > shape.mesh.material_ids[f];
-                    const auto &mat        = materials[shape.mesh.material_ids[f]];
-                    const auto &tex        = mat.diffuse_texname;
-                    for (auto v = 0; v < vertex; v++)
-                    {
-                        const auto idx = shape.mesh.indices[index_offset + v];
-                        indices.push_back(idx.vertex_index);
+                             //                        material_data.diffuseness[idx.vertex_index] =
+                             //                        .0f;
+                             //                        material_data.reflectiveness[idx.vertex_index]
+     =
+                             //                        .0f;
+     material_data.glassiness[idx.vertex_index]
+                             //                        = 1.f;
 
-                        //                        material_data.diffuseness[idx.vertex_index]    =
-                        //                        .0f;
-                        //                        material_data.reflectiveness[idx.vertex_index] =
-                        //                        .0f; material_data.glassiness[idx.vertex_index]
-                        //                        = 1.f;
+                             if (mat_exists)
+                             {
+                                 emissions[idx.vertex_index] =
+                                   Vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
 
-                        if (mat_exists)
-                        {
-                            emissions[idx.vertex_index] =
-                              Vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
+                                 if (mat.name == "Material.002")
+                                 {
+                                     material_data[idx.vertex_index].diffuseness = 0;
+                                     material_data[idx.vertex_index].metalness   = 1;
+                                     colours[idx.vertex_index]                   = Vec3(0.7, 0.7,
+     0.7);
+                                 }
 
-                            if (mat.name == "Material.002")
-                            {
-                                material_data[idx.vertex_index].diffuseness = 0;
-                                material_data[idx.vertex_index].metalness   = 1;
-                                colours[idx.vertex_index]                   = Vec3(0.7, 0.7, 0.7);
-                            }
+                                 if (mat.name == "Material.003")
+                                 {
+                                     material_data[idx.vertex_index].diffuseness = 0;
+                                     material_data[idx.vertex_index].glassiness  = 1;
+                                     colours[idx.vertex_index]                   = Vec3(0.2, 0.2,
+     0.8);
+                                 }
 
-                            if (mat.name == "Material.003")
-                            {
-                                material_data[idx.vertex_index].diffuseness = 0;
-                                material_data[idx.vertex_index].glassiness  = 1;
-                                colours[idx.vertex_index]                   = Vec3(0.2, 0.2, 0.8);
-                            }
+                                 if (mat.name == "windows")
+                                 {
+                                     material_data[idx.vertex_index].diffuseness = 0.f;
+                                     material_data[idx.vertex_index].glassiness  = 1.f;
+                                     colours[idx.vertex_index]                   = Vec3(0.2, 0.2,
+     0.2);
+                                 }
 
-                            if (mat.name == "windows")
-                            {
-                                material_data[idx.vertex_index].diffuseness = 0.f;
-                                material_data[idx.vertex_index].glassiness  = 1.f;
-                                colours[idx.vertex_index]                   = Vec3(0.2, 0.2, 0.2);
-                            }
+                                 if (mat.name == "Material")
+                                 { emissions[idx.vertex_index] = Vec3(0.6, 0.6, 3); }
 
-                            if (mat.name == "Material")
-                            { emissions[idx.vertex_index] = Vec3(0.6, 0.6, 3); }
+                                 if (!tex.empty())
+                                 {
+                                     const auto u     = attrib.texcoords[2 * idx.texcoord_index + 0];
+                                     const auto v     = attrib.texcoords[2 * idx.texcoord_index + 1];
+                                     const auto image = loaded_textures.find(tex)->second->get(u, v);
 
-                            if (!tex.empty())
-                            {
-                                const auto u     = attrib.texcoords[2 * idx.texcoord_index + 0];
-                                const auto v     = attrib.texcoords[2 * idx.texcoord_index + 1];
-                                const auto image = loaded_textures.find(tex)->second->get(u, v);
+                                     colours[idx.vertex_index] = Vec3(
+                                       static_cast<float>(image >> 0 & 0xFF) / 255.f,
+                                       static_cast<float>(image >> 8 & 0xFF) / 255.f,
+                                       static_cast<float>(image >> 16 & 0xFF) / 255.f);
+                                 }
+                             }
+                         }
+                         index_offset += vertex;
+                     }
+                 }
+             }
+             std::vector<std::thread> work_threads;
+             const auto               thread_count = detail.thread_count == pt2::MAX_THREAD_COUNT
+                             ? std::thread::hardware_concurrency() - 1
+                             : detail.thread_count;
+             work_threads.reserve(thread_count);
 
-                                colours[idx.vertex_index] = Vec3(
-                                  static_cast<float>(image >> 0 & 0xFF) / 255.f,
-                                  static_cast<float>(image >> 8 & 0xFF) / 255.f,
-                                  static_cast<float>(image >> 16 & 0xFF) / 255.f);
-                            }
-                        }
-                    }
-                    index_offset += vertex;
-                }
-            }
-        }
-        std::vector<std::thread> work_threads;
-        const auto               thread_count = detail.thread_count == pt2::MAX_THREAD_COUNT
-                        ? std::thread::hardware_concurrency() - 1
-                        : detail.thread_count;
-        work_threads.reserve(thread_count);
+             const auto device    = rtcNewDevice(nullptr);
+             const auto scene     = rtcNewScene(device);
+             auto       geom      = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_TRIANGLE);
+             auto *     _vertices = (float *) rtcSetNewGeometryBuffer(
+               geom,
+               RTC_BUFFER_TYPE_VERTEX,
+               0,
+               RTC_FORMAT_FLOAT3,
+               3 * sizeof(float),
+               vertices.size());
+             auto *_indices = (unsigned *) rtcSetNewGeometryBuffer(
+               geom,
+               RTC_BUFFER_TYPE_INDEX,
+               0,
+               RTC_FORMAT_UINT3,
+               3 * sizeof(unsigned),
+               indices.size() / 3);
 
-        const auto device    = rtcNewDevice(nullptr);
-        const auto scene     = rtcNewScene(device);
-        auto       geom      = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_TRIANGLE);
-        auto *     _vertices = (float *) rtcSetNewGeometryBuffer(
-          geom,
-          RTC_BUFFER_TYPE_VERTEX,
-          0,
-          RTC_FORMAT_FLOAT3,
-          3 * sizeof(float),
-          vertices.size());
-        auto *_indices = (unsigned *) rtcSetNewGeometryBuffer(
-          geom,
-          RTC_BUFFER_TYPE_INDEX,
-          0,
-          RTC_FORMAT_UINT3,
-          3 * sizeof(unsigned),
-          indices.size() / 3);
+             rtcSetGeometryVertexAttributeCount(geom, 7);
 
-        rtcSetGeometryVertexAttributeCount(geom, 7);
+             rtcSetSharedGeometryBuffer(
+               geom,
+               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+               0,
+               RTC_FORMAT_FLOAT3,
+               colours.data(),
+               0,
+               sizeof(Vec3),
+               colours.size());
 
-        rtcSetSharedGeometryBuffer(
-          geom,
-          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
-          0,
-          RTC_FORMAT_FLOAT3,
-          colours.data(),
-          0,
-          sizeof(Vec3),
-          colours.size());
+             rtcSetSharedGeometryBuffer(
+               geom,
+               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+               1,
+               RTC_FORMAT_FLOAT3,
+               emissions.data(),
+               0,
+               sizeof(Vec3),
+               emissions.size());
 
-        rtcSetSharedGeometryBuffer(
-          geom,
-          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
-          1,
-          RTC_FORMAT_FLOAT3,
-          emissions.data(),
-          0,
-          sizeof(Vec3),
-          emissions.size());
+             rtcSetSharedGeometryBuffer(
+               geom,
+               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+               2,
+               RTC_FORMAT_FLOAT,
+               material_data.data(),
+               0,
+               sizeof(MaterialData),
+               material_data.size());
 
-        rtcSetSharedGeometryBuffer(
-          geom,
-          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
-          2,
-          RTC_FORMAT_FLOAT,
-          material_data.data(),
-          0,
-          sizeof(MaterialData),
-          material_data.size());
+             rtcSetSharedGeometryBuffer(
+               geom,
+               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+               3,
+               RTC_FORMAT_FLOAT,
+               material_data.data(),
+               sizeof(float) * 1,
+               sizeof(MaterialData),
+               material_data.size());
 
-        rtcSetSharedGeometryBuffer(
-          geom,
-          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
-          3,
-          RTC_FORMAT_FLOAT,
-          material_data.data(),
-          sizeof(float) * 1,
-          sizeof(MaterialData),
-          material_data.size());
+             rtcSetSharedGeometryBuffer(
+               geom,
+               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+               4,
+               RTC_FORMAT_FLOAT,
+               material_data.data(),
+               sizeof(float) * 2,
+               sizeof(MaterialData),
+               material_data.size());
 
-        rtcSetSharedGeometryBuffer(
-          geom,
-          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
-          4,
-          RTC_FORMAT_FLOAT,
-          material_data.data(),
-          sizeof(float) * 2,
-          sizeof(MaterialData),
-          material_data.size());
+             rtcSetSharedGeometryBuffer(
+               geom,
+               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+               5,
+               RTC_FORMAT_FLOAT,
+               material_data.data(),
+               sizeof(float) * 3,
+               sizeof(MaterialData),
+               material_data.size());
 
-        rtcSetSharedGeometryBuffer(
-          geom,
-          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
-          5,
-          RTC_FORMAT_FLOAT,
-          material_data.data(),
-          sizeof(float) * 3,
-          sizeof(MaterialData),
-          material_data.size());
+             rtcSetSharedGeometryBuffer(
+               geom,
+               RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
+               6,
+               RTC_FORMAT_FLOAT,
+               material_data.data(),
+               sizeof(float) * 4,
+               sizeof(MaterialData),
+               material_data.size());
 
-        rtcSetSharedGeometryBuffer(
-          geom,
-          RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
-          6,
-          RTC_FORMAT_FLOAT,
-          material_data.data(),
-          sizeof(float) * 4,
-          sizeof(MaterialData),
-          material_data.size());
+             if (_vertices != nullptr)
+                 ::memcpy(_vertices, vertices.data(), sizeof(Vec3) * vertices.size());
+             if (_indices != nullptr)
+                 ::memcpy(_indices, indices.data(), sizeof(uint32_t) * indices.size());
 
-        if (_vertices != nullptr)
-            ::memcpy(_vertices, vertices.data(), sizeof(Vec3) * vertices.size());
-        if (_indices != nullptr)
-            ::memcpy(_indices, indices.data(), sizeof(uint32_t) * indices.size());
+             rtcCommitGeometry(geom);
+             rtcAttachGeometry(scene, geom);
+             rtcCommitScene(scene);
 
-        rtcCommitGeometry(geom);
-        rtcAttachGeometry(scene, geom);
-        rtcCommitScene(scene);
+             const auto start = std::chrono::steady_clock::now();
+             for (uint8_t i = 0; i < thread_count; i++)
+             {
+                 work_threads.emplace_back([&] {
+                     std::pair<uint16_t, uint16_t> next_grid;
+                     while (true)
+                     {
+                         if (!next_pixels(next_grid)) break;
+                         next_grid.first *= x_tiles;
+                         next_grid.second *= y_tiles;
 
-        const auto start = std::chrono::steady_clock::now();
-        for (uint8_t i = 0; i < thread_count; i++)
-        {
-            work_threads.emplace_back([&] {
-                std::pair<uint16_t, uint16_t> next_grid;
-                while (true)
-                {
-                    if (!next_pixels(next_grid)) break;
-                    next_grid.first *= x_tiles;
-                    next_grid.second *= y_tiles;
+                         const auto x_max =
+                           next_grid.first == 15 ? detail.width : next_grid.first + x_tiles;
+                         const auto y_max =
+                           next_grid.second == 15 ? detail.height : next_grid.second + y_tiles;
 
-                    const auto x_max =
-                      next_grid.first == 15 ? detail.width : next_grid.first + x_tiles;
-                    const auto y_max =
-                      next_grid.second == 15 ? detail.height : next_grid.second + y_tiles;
+                         for (int x = next_grid.first; x < x_max; x++)
+                         {
+                             for (int y = next_grid.second; y < y_max; y++)
+                             {
+                                 auto final_pixel = Vec3();
+                                 for (auto spp = 0; spp < detail.spp; spp++)
+                                 {
+                                     auto ray = scene_camera.get_ray(
+                                       ((float) x + rand()) / (float) detail.width,
+                                       ((float) y + rand()) / (float) detail.height);
+                                     auto throughput = Vec3(1, 1, 1);
+                                     auto final      = Vec3(0, 0, 0);
 
-                    for (int x = next_grid.first; x < x_max; x++)
-                    {
-                        for (int y = next_grid.second; y < y_max; y++)
-                        {
-                            auto final_pixel = Vec3();
-                            for (auto spp = 0; spp < detail.spp; spp++)
-                            {
-                                auto ray = scene_camera.get_ray(
-                                  ((float) x + rand()) / (float) detail.width,
-                                  ((float) y + rand()) / (float) detail.height);
-                                auto throughput = Vec3(1, 1, 1);
-                                auto final      = Vec3(0, 0, 0);
+                                     for (auto bounce = 0; bounce < detail.max_bounces; bounce++)
+                                     {
+                                         auto current = pt2::intersect_scene(ray, scene);
 
-                                for (auto bounce = 0; bounce < detail.max_bounces; bounce++)
-                                {
-                                    auto current = pt2::intersect_scene(ray, scene);
+                                         if (!current.hit)
+                                         {
+                                             float u = 0.5f +
+                                               atan2f(ray.direction.z, ray.direction.x) / (2
+     * 3.1415); float v = 0.5f - asinf(ray.direction.y) / 3.1415; v *= -1; v += 1; uint32_t   image =
+     skybox == pt2::INVALID_HANDLE ? 0 : local_skybox->get(u, v); const auto at    = Vec3(
+                                               static_cast<float>(image >> 0 & 0xFF) / 255.f,
+                                               static_cast<float>(image >> 8 & 0xFF) / 255.f,
+                                               static_cast<float>(image >> 16 & 0xFF) / 255.f);
+                                             final += throughput * at;
+                                             break;
+                                         }
+                                         process_hit_material(ray, current);
+                                         final += throughput * current.emission;
+                                         throughput *= current.albedo * current.reflectiveness;
+                                     }
 
-                                    if (!current.hit)
-                                    {
-                                        float u = 0.5f +
-                                          atan2f(ray.direction.z, ray.direction.x) / (2 * 3.1415);
-                                        float v = 0.5f - asinf(ray.direction.y) / 3.1415;
-                                        v *= -1;
-                                        v += 1;
-                                        uint32_t   image = skybox == pt2::INVALID_HANDLE
-                                            ? 0
-                                            : local_skybox->get(u, v);
-                                        const auto at    = Vec3(
-                                          static_cast<float>(image >> 0 & 0xFF) / 255.f,
-                                          static_cast<float>(image >> 8 & 0xFF) / 255.f,
-                                          static_cast<float>(image >> 16 & 0xFF) / 255.f);
-                                        final += throughput * at;
-                                        break;
-                                    }
-                                    process_hit_material(ray, current);
-                                    final += throughput * current.emission;
-                                    throughput *= current.albedo * current.reflectiveness;
-                                }
+                                     final_pixel += final;
+                                 }
 
-                                final_pixel += final;
-                            }
+                                 buffer[x + y * detail.width] |= static_cast<uint8_t>(
+                                   fminf(sqrtf(final_pixel.x / (float) detail.spp), 1.f) * 255);
+                                 buffer[x + y * detail.width] |=
+                                   static_cast<uint8_t>(
+                                     fminf(sqrtf(final_pixel.y / (float) detail.spp), 1.f) * 255)
+                                   << 8;
+                                 buffer[x + y * detail.width] |=
+                                   static_cast<uint8_t>(
+                                     fminf(sqrtf(final_pixel.z / (float) detail.spp), 1.f) * 255)
+                                   << 16;
+                                 buffer[x + y * detail.width] |= static_cast<uint8_t>(~0) << 24;
+                             }
+                         }
+                     }
+                 });
+             }
 
-                            buffer[x + y * detail.width] |= static_cast<uint8_t>(
-                              fminf(sqrtf(final_pixel.x / (float) detail.spp), 1.f) * 255);
-                            buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>(
-                                fminf(sqrtf(final_pixel.y / (float) detail.spp), 1.f) * 255)
-                              << 8;
-                            buffer[x + y * detail.width] |=
-                              static_cast<uint8_t>(
-                                fminf(sqrtf(final_pixel.z / (float) detail.spp), 1.f) * 255)
-                              << 16;
-                            buffer[x + y * detail.width] |= static_cast<uint8_t>(~0) << 24;
-                        }
-                    }
-                }
-            });
-        }
+             for (uint8_t i = 0; i < thread_count; i++) work_threads[i].join();
 
-        for (uint8_t i = 0; i < thread_count; i++) work_threads[i].join();
+             const auto end = std::chrono::steady_clock::now();
+             std::cout << "Time difference = "
+                       << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
+                       << "[ms]" << std::endl;
+         }
 
-        const auto end = std::chrono::steady_clock::now();
-        std::cout << "Time difference = "
-                  << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
-                  << "[ms]" << std::endl;
-    }
+     #ifdef PT2_GLFW
 
-#ifdef PT2_GLFW
+         void render_and_display_scene(SceneRenderDetail detail)
+         {
+             glfwInit();
+             const auto window = glfwCreateWindow(detail.width, detail.height, "PT2", nullptr,
+     nullptr); glfwMakeContextCurrent(window);
 
-    void render_and_display_scene(SceneRenderDetail detail)
-    {
-        glfwInit();
-        const auto window = glfwCreateWindow(detail.width, detail.height, "PT2", nullptr, nullptr);
-        glfwMakeContextCurrent(window);
+             std::vector<uint32_t> data;
+             data.resize(detail.width * detail.height);
 
-        std::vector<uint32_t> data;
-        data.resize(detail.width * detail.height);
+             std::thread render_thread([&] { render_scene(detail, data.data()); });
+             while (!glfwWindowShouldClose(window))
+             {
+                 glClear(GL_COLOR_BUFFER_BIT);
+                 glDrawPixels(detail.width, detail.height, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+                 glfwSwapBuffers(window);
+                 glfwPollEvents();
+             }
+             render_thread.join();
+         }
 
-        std::thread render_thread([&] { render_scene(detail, data.data()); });
-        while (!glfwWindowShouldClose(window))
-        {
-            glClear(GL_COLOR_BUFFER_BIT);
-            glDrawPixels(detail.width, detail.height, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
-            glfwSwapBuffers(window);
-            glfwPollEvents();
-        }
-        render_thread.join();
-    }
+     #endif
 
-#endif
+         void process_hit_material(Ray &ray, HitRecord &record)
+         {
+             ray.origin            = record.intersection_point + record.normal * 0.01f;
+             ray.direction         = ray.direction.reflect(record.normal);
+             record.reflectiveness = 1.f;
+             return;
 
-    void process_hit_material(Ray &ray, HitRecord &record)
-    {
-        ray.origin            = record.intersection_point + record.normal * 0.01f;
-        ray.direction         = ray.direction.reflect(record.normal);
-        record.reflectiveness = 1.f;
-        return;
+             auto material_branch = rand();
 
-        auto material_branch = rand();
+             if (material_branch < record.material_data.diffuseness)
+             {
+                 ray.origin           = record.intersection_point + record.normal * 0.01f;
+                 const auto u         = rand();
+                 const auto v         = rand();
+                 const auto phi       = 2.0f * 3.1415 * u;
+                 const auto cos_theta = 2.0f * v - 1.0f;
+                 const auto a         = sqrtf(1.0f - cos_theta * cos_theta);
+                 ray.direction =
+                   record.normal + Vec3(a * cosf(phi), a * sinf(phi), cos_theta).to_unit_vector();
+                 record.reflectiveness = fmaxf(0.f, record.normal.dot(ray.direction));
+                 return;
+             }
+             material_branch -= record.material_data.diffuseness;
 
-        if (material_branch < record.material_data.diffuseness)
-        {
-            ray.origin           = record.intersection_point + record.normal * 0.01f;
-            const auto u         = rand();
-            const auto v         = rand();
-            const auto phi       = 2.0f * 3.1415 * u;
-            const auto cos_theta = 2.0f * v - 1.0f;
-            const auto a         = sqrtf(1.0f - cos_theta * cos_theta);
-            ray.direction =
-              record.normal + Vec3(a * cosf(phi), a * sinf(phi), cos_theta).to_unit_vector();
-            record.reflectiveness = fmaxf(0.f, record.normal.dot(ray.direction));
-            return;
-        }
-        material_branch -= record.material_data.diffuseness;
-
-        if (material_branch < record.material_data.metalness)
-        {
-            /** Cook Torrence BRDF
-             *
-             * Equation:
-             * f_r(v,l) = D(h,a)G(v,l,a)F(v,h,f0) / 4(n*v)(n*l)
-             *
-             * Where:
-             * v = Inverse Ray Direction
-             * l = Scattered Ray Direction
-             * n = Surface Normal
-             * h = Half Unit Vector Between l and v
-             * a = roughness
-             *
-             */
+             if (material_branch < record.material_data.metalness)
+             {
+                 /** Cook Torrence BRDF
+                  *
+                  * Equation:
+                  * f_r(v,l) = D(h,a)G(v,l,a)F(v,h,f0) / 4(n*v)(n*l)
+                  *
+                  * Where:
+                  * v = Inverse Ray Direction
+                  * l = Scattered Ray Direction
+                  * n = Surface Normal
+                  * h = Half Unit Vector Between l and v
+                  * a = roughness
+                  *
+                  */
 
 /** GGX NDF
  *
@@ -969,9 +1073,10 @@ namespace pt2
  */
 
 /*
-            const auto a_sq       = record.material_data.roughness * record.material_data.roughness;
-            const auto h          = record.normal.half_unit_from(ray.direction.inv());
-            const auto n_dot_h_sq = powf(record.normal.dot(h), 2.f);
+            const auto a_sq       = record.material_data.roughness *
+   record.material_data.roughness; const auto h          =
+   record.normal.half_unit_from(ray.direction.inv()); const auto n_dot_h_sq =
+   powf(record.normal.dot(h), 2.f);
 
             const auto bottom_term = M_PI * powf(n_dot_h_sq * (a_sq - 1), 2.f);
             const auto d_ggx       = a_sq / bottom_term;
@@ -987,11 +1092,13 @@ namespace pt2
 /*
             const auto n_dot_l    = record.normal.dot(ray.direction.reflect(record.normal));
             const auto n_dot_l_sq = n_dot_l * n_dot_h_sq;
-            const auto g0_n_l     = 2 * n_dot_l / n_dot_l + sqrtf(a_sq + (1 - a_sq) * (n_dot_l_sq));
+            const auto g0_n_l     = 2 * n_dot_l / n_dot_l + sqrtf(a_sq + (1 - a_sq) *
+   (n_dot_l_sq));
 
             const auto n_dot_v    = record.normal.dot(ray.direction.inv());
             const auto n_dot_v_sq = n_dot_v * n_dot_v;
-            const auto g0_n_v     = 2 * n_dot_v / n_dot_v + sqrtf(a_sq + (1 - a_sq) * (n_dot_v_sq));
+            const auto g0_n_v     = 2 * n_dot_v / n_dot_v + sqrtf(a_sq + (1 - a_sq) *
+   (n_dot_v_sq));
 
             const auto g_ggx = g0_n_l * g0_n_v;
 
@@ -1034,10 +1141,9 @@ namespace pt2
 
             auto outward_normal = Vec3();
             auto rayOrigin      = ray.direction;
-            auto reflected      = rayOrigin - record.normal * record.normal.dot(ray.direction) * 2;
-            auto nit            = 0.f;
-            auto cosine         = 0.f;
-            if (ray.direction.dot(record.normal) > 0)
+            auto reflected      = rayOrigin - record.normal * record.normal.dot(ray.direction) *
+2; auto nit            = 0.f; auto cosine         = 0.f; if (ray.direction.dot(record.normal) >
+0)
             {
                 outward_normal = record.normal * -1.0f;
                 nit            = 1.5f;
@@ -1173,7 +1279,8 @@ namespace pt2
             best.intersection_point = ray.point_at(rayhit.ray.tfar);
             best.distance           = rayhit.ray.tfar;
             best.hit                = true;
-            best.normal = Vec3(rayhit.hit.Ng_x, rayhit.hit.Ng_y, rayhit.hit.Ng_z).to_unit_vector();
+            best.normal = Vec3(rayhit.hit.Ng_x, rayhit.hit.Ng_y,
+rayhit.hit.Ng_z).to_unit_vector();
         }
 
         return best;

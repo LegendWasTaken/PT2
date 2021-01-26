@@ -37,11 +37,16 @@ if (NOT imgui_POPULATED)
 
 endif ()
 
-add_executable(PT2 src/main.cpp src/pt2/pt2.h src/pt2/pt2.cpp src/pt2/structs.h
+add_executable(PT2
+        src/main.cpp
+        src/pt2/pt2.cpp
+        src/pt2/structs.h
         src/imgui/imgui_impl_glfw.cpp
         src/imgui/imgui_impl_opengl3.cpp
         src/glad/glad.c
+        src/pt2/thread_pool.cpp
         )
+
 target_include_directories(PT2 PUBLIC "extern")
 target_include_directories(PT2 PUBLIC "src")
 target_link_libraries(PT2 glfw embree glm lib_imgui)

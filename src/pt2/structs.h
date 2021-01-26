@@ -11,6 +11,19 @@
 
 namespace PT2
 {
+    struct RenderTaskDetail
+    {
+        uint16_t x;
+        uint16_t y;
+    };
+
+    struct Image
+    {
+        uint64_t width;
+        uint64_t height;
+        std::vector<uint8_t> data;
+    };
+
     struct Ray
     {
     public:
@@ -61,20 +74,6 @@ namespace PT2
         unsigned int resolution_y;
     };
 
-    struct RenderDetail
-    {
-    public:
-        uint16_t thread_count      = 1;
-        uint16_t samples_per_pixel = 4;
-        uint16_t min_bounces       = 5;
-        struct
-        {
-            glm::vec3 origin  = glm::vec3();
-            glm::vec3 look_at = glm::vec3();
-            float     fov     = 90.f;
-        } camera;
-    };
-
     struct HitRecord
     {
     public:
@@ -121,19 +120,20 @@ namespace PT2
 
     struct RayTracingContext
     {
+        int bounces = 4;
+        int spp = 1;
         struct
         {
-            uint16_t x = 512;
-            uint16_t y = 512;
+            int x = 512;
+            int y = 512;
         } resolution;
         struct
         {
-            uint16_t count  = 16;
-            uint16_t x_size = 512 / 16;
-            uint16_t y_size = 512 / 16;
+            int count  = 16;
+            int x_size = 512 / 16;
+            int y_size = 512 / 16;
         } tiles;
         std::vector<uint8_t>                      buffer;
-        std::queue<std::pair<uint16_t, uint16_t>> next_tiles;
 
         Camera camera = Camera(glm::vec3(2, 2, 0), glm::vec3(0, 0, 0), 90, 1);
     };

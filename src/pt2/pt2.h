@@ -10,8 +10,10 @@
 #include <thread>
 #include <shared_mutex>
 #include <embree3/rtcore.h>
+#include <filesystem>
 
 #include <pt2/structs.h>
+#include <pt2/thread_pool.h>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -34,8 +36,6 @@ namespace PT2
 
         void start_gui();
 
-        void submit_detail(const RenderDetail &detail);
-
         void load_model(const std::string &model, ModelType model_type);
 
     private:
@@ -45,11 +45,9 @@ namespace PT2
 
         void _update_uniforms() const;
 
-        void _render_screen();
+        void _render_screen(uint64_t spp = 0);
 
-        void _render_task();
-
-        [[noreturn]] void _render_thread_task();
+        void _render_task(RenderTaskDetail detail);
 
         void _initialize();
 
@@ -57,27 +55,22 @@ namespace PT2
 
         [[nodiscard]] HitRecord _intersect_scene(const Ray &ray) const;
 
-        [[nodiscard]] std::optional<std::pair<uint16_t, uint16_t>> _next_tile_to_render();
-
         GLFWwindow *_window;
-
-        std::mutex _tile_mutex;
-        std::atomic<bool> _is_rendering = false;
-        std::atomic<bool> _updating_scene = false;
 
         RenderTargetSettings _render_target_setting;
         RayTracingContext    _ray_tracing_context;
         RenderingContext     _rendering_context;
-        RenderDetail         _render_detail;
 
         RTCScene    _scene;
         RTCDevice   _device;
         RTCGeometry _geometry;
 
-        std::vector<glm::vec3> _vertices;
-        std::vector<uint32_t> _indices;
-        std::vector<std::thread> _render_threads;
+        ThreadPool _render_pool;
 
+        std::optional<Image> _envmap;
+
+        std::vector<glm::vec3> _vertices;
+        std::vector<uint32_t>  _indices;
     };
 }    // namespace PT2
 
