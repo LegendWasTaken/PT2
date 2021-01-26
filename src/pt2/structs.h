@@ -19,8 +19,8 @@ namespace PT2
 
     struct Image
     {
-        uint64_t width;
-        uint64_t height;
+        uint64_t             width;
+        uint64_t             height;
         std::vector<uint8_t> data;
     };
 
@@ -41,7 +41,7 @@ namespace PT2
     struct Material
     {
     public:
-        enum
+        enum Type
         {
             DIFFUSE,
             REFRACTIVE,
@@ -51,10 +51,10 @@ namespace PT2
 
         float reflectiveness = 0.2f;
         float roughness      = 0.0f;
-        float emission       = 0.3f;
+        float emission       = 0.0f;
         float ior            = 0.0f;
 
-        glm::vec3 color = glm::vec3(0.0f, 0.0f, 0.0f);
+        glm::vec3   color = glm::vec3(0.0f, 0.0f, 0.0f);
         std::string name;
     };
 
@@ -105,7 +105,8 @@ namespace PT2
             this->center     = location + w;
         }
 
-        [[nodiscard]] Ray get_ray(float x, float y) const noexcept {
+        [[nodiscard]] Ray get_ray(float x, float y) const noexcept
+        {
             const auto x_offset  = horizontal * (x * 2.f - 1);
             const auto y_offset  = vertical * (y * 2.f - 1);
             const auto direction = glm::normalize((center + x_offset + y_offset) - location);
@@ -113,16 +114,16 @@ namespace PT2
         }
 
     private:
-        glm::vec3 horizontal{};
-        glm::vec3 vertical{};
-        glm::vec3 location{};
-        glm::vec3 center{};
+        glm::vec3 horizontal {};
+        glm::vec3 vertical {};
+        glm::vec3 location {};
+        glm::vec3 center {};
     };
 
     struct RayTracingContext
     {
         int bounces = 4;
-        int spp = 1;
+        int spp     = 1;
         struct
         {
             int x = 512;
@@ -134,7 +135,7 @@ namespace PT2
             int x_size = 512 / 8;
             int y_size = 512 / 8;
         } tiles;
-        std::vector<uint8_t>                      buffer;
+        std::vector<uint32_t> buffer;
 
         Camera camera = Camera(glm::vec3(2, 2, 0), glm::vec3(0, 0, 0), 90, 1);
     };

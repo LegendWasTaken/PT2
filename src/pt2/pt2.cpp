@@ -173,11 +173,11 @@ namespace PT2
         glTexImage2D(
           GL_TEXTURE_2D,
           0,
-          GL_RGB,
+          GL_RGBA8,
           _ray_tracing_context.resolution.x,
           _ray_tracing_context.resolution.y,
           0,
-          GL_RGB,
+          GL_RGBA,
           GL_UNSIGNED_BYTE,
           _ray_tracing_context.buffer.data());
         glGenerateMipmap(GL_TEXTURE_2D);
@@ -213,7 +213,9 @@ namespace PT2
             {
                 ImGui::Begin("Material Editor");
                 static Material *selected_material;
-                if (ImGui::BeginCombo("Edit Material", selected_material == nullptr ? nullptr : selected_material->name.c_str()))
+                if (ImGui::BeginCombo(
+                      "Edit Material",
+                      selected_material == nullptr ? nullptr : selected_material->name.c_str()))
                 {
                     for (auto &mat : _loaded_materials)
                     {
@@ -225,7 +227,57 @@ namespace PT2
 
                 if (selected_material != nullptr && !selected_material->name.empty())
                 {
+                    std::string material_type = [&]() {
+                        if (selected_material->type == Material::DIFFUSE)
+                            return "Diffuse";
+                        else if (selected_material->type == Material::REFRACTIVE)
+                            return "Refractive";
+                        else if (selected_material->type == Material::MIRROR)
+                            return "Mirror";
+                        else if (selected_material->type == Material::METAL)
+                            return "Metal";
+                        else
+                            return "Unknown";
+                    }();
+                    if (ImGui::BeginCombo("Material Type", material_type.c_str()))
+                    {
+                        if (ImGui::Selectable("Diffuse"))
+                            selected_material->type = Material::DIFFUSE;
+                        if (ImGui::Selectable("Refractive"))
+                            selected_material->type = Material::REFRACTIVE;
+                        if (ImGui::Selectable("Mirror")) selected_material->type = Material::MIRROR;
+                        if (ImGui::Selectable("Metal")) selected_material->type = Material::METAL;
+                        ImGui::EndCombo();
+                    }
                     ImGui::ColorEdit3("Material Color", &selected_material->color[0]);
+                    ImGui::SliderFloat("Emission", &selected_material->emission, 0.0f, 1.0f);
+                    switch (selected_material->type)
+                    {
+                    case Material::DIFFUSE:
+                        selected_material->reflectiveness = 1.0f / 3.1415f;
+                        break;
+                    case Material::REFRACTIVE:
+                        ImGui::SliderFloat("Roughness", &selected_material->roughness, 0.0f, 1.0f);
+                        ImGui::SliderFloat("IOR", &selected_material->ior, 1.0f, 3.0f);
+
+                        break;
+                    case Material::MIRROR:
+                        ImGui::SliderFloat(
+                          "Reflectiveness",
+                          &selected_material->reflectiveness,
+                          0.0f,
+                          1.0f);
+
+                        break;
+                    case Material::METAL:
+                        ImGui::SliderFloat(
+                          "Reflectiveness",
+                          &selected_material->reflectiveness,
+                          0.0f,
+                          1.0f);
+                        ImGui::SliderFloat("Roughness", &selected_material->roughness, 0.0f, 1.0f);
+                        break;
+                    }
                 }
                 ImGui::End();
             }
@@ -304,8 +356,8 @@ namespace PT2
                 ImGui::Begin("Rendering Context");
                 ImGui::InputInt("Max Bounces", &ctx.bounces, 1, 5);
                 ImGui::InputInt("Samples Per Pixel", &ctx.spp, 1, 2);
-                ImGui::SliderInt("Res X", &ctx.resolution.x, 128, 2000);
-                ImGui::SliderInt("Res Y", &ctx.resolution.y, 128, 2000);
+                ImGui::InputInt("Res X", &ctx.resolution.x, 2, 10);
+                ImGui::InputInt("Res Y", &ctx.resolution.y, 2, 10);
                 if (ctx.resolution.x % 2 != 0) ctx.resolution.x--;
                 if (ctx.resolution.y % 2 != 0) ctx.resolution.y--;
                 ImGui::SliderInt("Tile Count", &ctx.tiles.count, 4, 32);
@@ -342,11 +394,11 @@ namespace PT2
             glTexImage2D(
               GL_TEXTURE_2D,
               0,
-              GL_RGB,
+              GL_RGBA8,
               _ray_tracing_context.resolution.x,
               _ray_tracing_context.resolution.y,
               0,
-              GL_RGB,
+              GL_RGBA,
               GL_UNSIGNED_BYTE,
               _ray_tracing_context.buffer.data());
             glGenerateMipmap(GL_TEXTURE_2D);
@@ -484,11 +536,13 @@ namespace PT2
         auto detail = RenderTaskDetail();
 
         const auto tile_count = _ray_tracing_context.tiles.count;
+        const auto resolution = _ray_tracing_context.resolution;
+        const auto tile_size  = _ray_tracing_context.tiles;
 
         std::vector<std::function<void()>> tasks;
 #if 1
-        for (auto i = 0; i < tile_count; i++)
-            for (auto j = 0; j < tile_count; j++)
+        for (int j = 0; j * tile_size.y_size < resolution.y; ++j)
+            for (int i = 0; i * tile_size.x_size < resolution.x; ++i)
             {
                 detail.x = i;
                 detail.y = j;
@@ -498,8 +552,8 @@ namespace PT2
 
         _render_pool.add_tasks(tasks);
 #else
-        detail.x         = tile_count / 2;
-        detail.y         = tile_count / 2;
+        detail.x = tile_count / 2;
+        detail.y = tile_count / 2;
         for (int i = 0; i < tile_count * tile_count; ++i)
         {
             _render_pool.add_task([detail, this] { _render_task(detail); });
@@ -544,13 +598,26 @@ namespace PT2
         return best;
     }
 
-    Ray Renderer::_process_hit(const HitRecord &record, const Ray &ray) const
+    Ray Renderer::_process_hit(const HitRecord &record, const Ray &ray, float &out_reflection)
     {
         if (record.hit_material->type == Material::MIRROR)
         {
             auto new_ray      = ray;
             new_ray.direction = glm::reflect(ray.direction, record.normal);
             new_ray.origin    = record.intersection_point + record.normal * 0.01f;
+            return new_ray;
+        }
+        else if (record.hit_material->type == Material::DIFFUSE)
+        {
+            auto new_ray = ray;
+            const auto u = rand_float();
+            const auto v = rand_float();
+            const auto phi = 2.0f * 3.1415f * u;
+            const auto cos_theta = 2.0f * v - 1.0f;
+            const auto a = sqrtf(1.0f - cos_theta * cos_theta);
+            new_ray.direction = record.normal + glm::normalize(glm::vec3(a * cosf(phi), a * sinf(phi), cos_theta));
+            new_ray.origin = record.intersection_point + record.normal * 0.01f;
+            out_reflection = fmaxf(0.f, glm::dot(record.normal, ray.direction));
             return new_ray;
         }
         else
@@ -564,12 +631,16 @@ namespace PT2
 
     void Renderer::_render_task(RenderTaskDetail detail)
     {
-        const auto x_max = std::min(
-          detail.x * _ray_tracing_context.tiles.x_size + _ray_tracing_context.tiles.x_size,
-          (int) _ray_tracing_context.resolution.x);
-        const auto y_max = std::min(
-          detail.y * _ray_tracing_context.tiles.y_size + _ray_tracing_context.tiles.y_size,
-          (int) _ray_tracing_context.resolution.y);
+        const auto x_max = detail.x - 1 == _ray_tracing_context.tiles.count
+          ? _ray_tracing_context.resolution.x
+          : std::min(
+              detail.x * _ray_tracing_context.tiles.x_size + _ray_tracing_context.tiles.x_size,
+              (int) _ray_tracing_context.resolution.x);
+        const auto y_max = detail.y - 1 == _ray_tracing_context.tiles.count
+          ? _ray_tracing_context.resolution.y
+          : std::min(
+              detail.y * _ray_tracing_context.tiles.y_size + _ray_tracing_context.tiles.y_size,
+              (int) _ray_tracing_context.resolution.y);
 
         for (uint64_t x = detail.x * _ray_tracing_context.tiles.x_size; x < x_max; x++)
         {
@@ -618,7 +689,9 @@ namespace PT2
                         }
                         else
                         {
-                            ray = _process_hit(current, ray);
+                            auto reflection = -1.f;
+                            ray = _process_hit(current, ray, reflection);
+                            if (reflection == -1.f) reflection = current.hit_material->reflectiveness;
                             if (_loaded_materials.empty())
                             {
                                 final += throughput * 0.3f;
@@ -626,9 +699,9 @@ namespace PT2
                             }
                             else
                             {
-                                final += throughput * current.hit_material->emission;
-                                throughput *= current.hit_material->color *
-                                  current.hit_material->reflectiveness;
+                                final += throughput * current.hit_material->emission *
+                                  current.hit_material->color;
+                                throughput *= current.hit_material->color * reflection;
                             }
                         }
                     }
@@ -636,10 +709,14 @@ namespace PT2
                 }
 
                 final_spp /= _ray_tracing_context.spp;
-                const auto index = (x + y * _ray_tracing_context.resolution.x) * 3;
+                const auto index = (x + y * _ray_tracing_context.resolution.x);
 
-                for (auto i = 0; i < 3; i++)
-                { _ray_tracing_context.buffer[index + i] = final_spp[i] * 255.f; }
+                _ray_tracing_context.buffer[index] |= static_cast<uint8_t>(final_spp[0] * 255.f);
+                _ray_tracing_context.buffer[index] |= static_cast<uint8_t>(final_spp[1] * 255.f)
+                  << 8;
+                _ray_tracing_context.buffer[index] |= static_cast<uint8_t>(final_spp[2] * 255.f)
+                  << 16;
+                _ray_tracing_context.buffer[index] |= static_cast<uint8_t>(~0) << 24;
             }
         }
     }

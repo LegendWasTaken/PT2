@@ -51,7 +51,7 @@ namespace PT2
 
         void _initialize();
 
-        [[nodiscard]] Ray _process_hit(const HitRecord &record, const Ray &ray) const;
+        [[nodiscard]] Ray _process_hit(const HitRecord &record, const Ray &ray, float &reflection);
 
         [[nodiscard]] HitRecord _intersect_scene(const Ray &ray);
 
