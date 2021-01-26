@@ -50,3 +50,5 @@ add_executable(PT2
 target_include_directories(PT2 PUBLIC "extern")
 target_include_directories(PT2 PUBLIC "src")
 target_link_libraries(PT2 glfw embree glm lib_imgui)
+#target_compile_options(PT2 PUBLIC -fsanitize=thread)
+#target_link_options(PT2 PUBLIC -fsanitize=thread)

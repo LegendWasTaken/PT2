@@ -211,9 +211,28 @@ namespace PT2
             }
 
             {
+                ImGui::Begin("Material Editor");
+                static Material *selected_material;
+                if (ImGui::BeginCombo("Edit Material", selected_material == nullptr ? nullptr : selected_material->name.c_str()))
+                {
+                    for (auto &mat : _loaded_materials)
+                    {
+                        const auto selected = ImGui::Selectable(mat.name.c_str());
+                        if (selected) selected_material = &mat;
+                    }
+                    ImGui::EndCombo();
+                }
+
+                if (selected_material != nullptr && !selected_material->name.empty())
+                {
+                    ImGui::ColorEdit3("Material Color", &selected_material->color[0]);
+                }
+                ImGui::End();
+            }
+
+            {
                 ImGui::Begin("Envmap Loader");
                 static std::filesystem::path selectedImage;
-                static bool                  idk;
                 if (ImGui::BeginCombo("Selected Image", selectedImage.filename().c_str()))
                 {
                     for (const auto &directory_entry :
@@ -222,7 +241,7 @@ namespace PT2
                         if (directory_entry.is_regular_file())
                         {
                             const auto selected =
-                              ImGui::Selectable(directory_entry.path().filename().c_str(), &idk);
+                              ImGui::Selectable(directory_entry.path().filename().c_str());
                             if (selected) selectedImage = directory_entry.path();
                         }
                     }
@@ -268,8 +287,8 @@ namespace PT2
 
                 if (ImGui::Button("Add Model") && selectedModel != std::filesystem::path())
                 {
-                    load_model(selectedModel, ModelType::OBJ);
                     _render_pool.stop();
+                    load_model(selectedModel, ModelType::OBJ);
                     _render_pool.start();
                     _render_screen();
                 }
@@ -372,6 +391,8 @@ namespace PT2
 
     void Renderer::load_model(const std::string &model, ModelType model_type)
     {
+        _loaded_materials.clear();
+        _material_indices.clear();
         _vertices.clear();
         _indices.clear();
         if (model_type == ModelType::OBJ)
@@ -400,6 +421,7 @@ namespace PT2
                 std::cerr << "Bad model lol" << std::endl;
                 exit(-1);
             }
+
             const auto vertex_count = attrib.vertices.size() / 3;
             _vertices.reserve(vertex_count);
             for (auto i = 0; i < attrib.vertices.size(); i += 3)
@@ -414,6 +436,17 @@ namespace PT2
             {
                 _indices.reserve(shape.mesh.indices.size());
                 for (const auto idx : shape.mesh.indices) _indices.push_back(idx.vertex_index);
+                auto material           = Material();
+                material.name           = shape.name;
+                material.type           = Material::MIRROR;
+                material.reflectiveness = 1.f;
+                material.color          = glm::vec3(rand_float(), rand_float(), rand_float());
+
+                _loaded_materials.push_back(std::move(material));
+
+                _material_indices.reserve(shape.mesh.indices.size() / 3);
+                for (auto f = 0; f < shape.mesh.num_face_vertices.size(); f++)
+                    _material_indices.push_back(_loaded_materials.size() - 1);
             }
         }
 
@@ -465,12 +498,8 @@ namespace PT2
 
         _render_pool.add_tasks(tasks);
 #else
-        bool left        = false;
-        bool down        = false;
         detail.x         = tile_count / 2;
         detail.y         = tile_count / 2;
-        auto tasks_added = 0;
-        auto distance    = 1;
         for (int i = 0; i < tile_count * tile_count; ++i)
         {
             _render_pool.add_task([detail, this] { _render_task(detail); });
@@ -482,7 +511,7 @@ namespace PT2
 #endif
     }
 
-    HitRecord Renderer::_intersect_scene(const Ray &ray) const
+    HitRecord Renderer::_intersect_scene(const Ray &ray)
     {
         auto ctx = RTCIntersectContext();
         rtcInitIntersectContext(&ctx);
@@ -509,6 +538,7 @@ namespace PT2
             best.intersection_point = ray.point_at(ray_hit.ray.tfar);
             best.normal =
               glm::normalize(glm::vec3(ray_hit.hit.Ng_x, ray_hit.hit.Ng_y, ray_hit.hit.Ng_z));
+            best.hit_material = &(_loaded_materials[_material_indices[ray_hit.hit.primID]]);
         }
 
         return best;
@@ -516,24 +546,34 @@ namespace PT2
 
     Ray Renderer::_process_hit(const HitRecord &record, const Ray &ray) const
     {
-        auto new_ray      = ray;
-        new_ray.direction = glm::reflect(ray.direction, record.normal);
-        new_ray.origin    = record.intersection_point + record.normal * 0.01f;
-        return new_ray;
+        if (record.hit_material->type == Material::MIRROR)
+        {
+            auto new_ray      = ray;
+            new_ray.direction = glm::reflect(ray.direction, record.normal);
+            new_ray.origin    = record.intersection_point + record.normal * 0.01f;
+            return new_ray;
+        }
+        else
+        {
+            auto new_ray      = ray;
+            new_ray.direction = glm::reflect(ray.direction, record.normal);
+            new_ray.origin    = record.intersection_point + record.normal * 0.01f;
+            return new_ray;
+        }
     }
 
     void Renderer::_render_task(RenderTaskDetail detail)
     {
-        const auto x_max = std::max(
-          detail.x * _ray_tracing_context.tiles.count + _ray_tracing_context.tiles.x_size,
+        const auto x_max = std::min(
+          detail.x * _ray_tracing_context.tiles.x_size + _ray_tracing_context.tiles.x_size,
           (int) _ray_tracing_context.resolution.x);
-        const auto y_max = std::max(
-          detail.y * _ray_tracing_context.tiles.count + _ray_tracing_context.tiles.y_size,
+        const auto y_max = std::min(
+          detail.y * _ray_tracing_context.tiles.y_size + _ray_tracing_context.tiles.y_size,
           (int) _ray_tracing_context.resolution.y);
 
-        for (uint64_t x = detail.x * 16; x < x_max; x++)
+        for (uint64_t x = detail.x * _ray_tracing_context.tiles.x_size; x < x_max; x++)
         {
-            for (uint64_t y = detail.y * 16; y < y_max; y++)
+            for (uint64_t y = detail.y * _ray_tracing_context.tiles.y_size; y < y_max; y++)
             {
                 auto final_spp = glm::vec3(0, 0, 0);
                 for (auto spp = 0; spp < _ray_tracing_context.spp; spp++)
@@ -579,8 +619,17 @@ namespace PT2
                         else
                         {
                             ray = _process_hit(current, ray);
-                            final += throughput * 0.3f;
-                            throughput *= glm::vec3(1, 1, 1) * .2f;
+                            if (_loaded_materials.empty())
+                            {
+                                final += throughput * 0.3f;
+                                throughput *= glm::vec3(1, 1, 1) * .2f;
+                            }
+                            else
+                            {
+                                final += throughput * current.hit_material->emission;
+                                throughput *= current.hit_material->color *
+                                  current.hit_material->reflectiveness;
+                            }
                         }
                     }
                     final_spp += final;

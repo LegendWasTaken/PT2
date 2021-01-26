@@ -53,7 +53,7 @@ namespace PT2
 
         [[nodiscard]] Ray _process_hit(const HitRecord &record, const Ray &ray) const;
 
-        [[nodiscard]] HitRecord _intersect_scene(const Ray &ray) const;
+        [[nodiscard]] HitRecord _intersect_scene(const Ray &ray);
 
         GLFWwindow *_window;
 
@@ -68,7 +68,9 @@ namespace PT2
         ThreadPool _render_pool;
 
         std::optional<Image> _envmap;
+        std::vector<Material> _loaded_materials;
 
+        std::vector<uint8_t> _material_indices;
         std::vector<glm::vec3> _vertices;
         std::vector<uint32_t>  _indices;
     };

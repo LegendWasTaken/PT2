@@ -1,3 +1,4 @@
+#include <iostream>
 #include "thread_pool.h"
 
 ThreadPool::ThreadPool(uint8_t thread_count) : _thread_count(thread_count), _should_work(true)
@@ -24,13 +25,11 @@ void ThreadPool::_thread_wait()
             _work_condition_variable.wait(lock);
         }
         auto task = _get_task();
-        if (task.has_value())
+        while (task.has_value())
+        {
             task.value()();
-//        while (task.has_value())
-//        {
-//            task.value()();
-//            task = _get_task();
-//        }
+            task = _get_task();
+        }
     }
 }
 
@@ -72,7 +71,7 @@ void ThreadPool::clear_tasks()
 std::optional<std::function<void()>> ThreadPool::_get_task()
 {
     std::unique_lock lock(_task_mutex);
-    while (!_tasks.empty())
+    if (!_tasks.empty())
     {
         const auto ret = _tasks.front();
         _tasks.pop();

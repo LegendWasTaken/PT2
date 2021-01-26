@@ -49,12 +49,13 @@ namespace PT2
             METAL,
         } type;
 
-        float reflectiveness = 0.0f;
+        float reflectiveness = 0.2f;
         float roughness      = 0.0f;
-        float emission       = 0.0f;
+        float emission       = 0.3f;
         float ior            = 0.0f;
 
         glm::vec3 color = glm::vec3(0.0f, 0.0f, 0.0f);
+        std::string name;
     };
 
     struct RenderTargetSettings
@@ -130,8 +131,8 @@ namespace PT2
         struct
         {
             int count  = 16;
-            int x_size = 512 / 16;
-            int y_size = 512 / 16;
+            int x_size = 512 / 8;
+            int y_size = 512 / 8;
         } tiles;
         std::vector<uint8_t>                      buffer;
 
