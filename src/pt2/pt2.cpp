@@ -605,6 +605,7 @@ namespace PT2
             auto new_ray      = ray;
             new_ray.direction = glm::reflect(ray.direction, record.normal);
             new_ray.origin    = record.intersection_point + record.normal * 0.01f;
+            out_reflection = 1.f;
             return new_ray;
         }
         else if (record.hit_material->type == Material::DIFFUSE)
@@ -616,8 +617,25 @@ namespace PT2
             const auto cos_theta = 2.0f * v - 1.0f;
             const auto a = sqrtf(1.0f - cos_theta * cos_theta);
             new_ray.direction = record.normal + glm::normalize(glm::vec3(a * cosf(phi), a * sinf(phi), cos_theta));
+            if (glm::dot(new_ray.direction, record.normal) < 0.0f)
+                throw std::exception();
             new_ray.origin = record.intersection_point + record.normal * 0.01f;
             out_reflection = fmaxf(0.f, glm::dot(record.normal, ray.direction));
+            return new_ray;
+        }
+        else if (record.hit_material->type == Material::METAL)
+        {
+            auto new_ray = ray;
+            const auto u = rand_float();
+            const auto v = rand_float();
+            const auto phi = 2.0f * 3.1415f * u;
+            const auto cos_theta = 2.0f * v - 1.0f;
+            const auto a = sqrtf(1.0f - cos_theta * cos_theta);
+            new_ray.direction = record.normal * glm::normalize(glm::vec3(a * cosf(phi), a * sinf(phi), cos_theta));
+            if (glm::dot(new_ray.direction, record.normal) < 0.0f)
+                throw std::exception(); // This throws, do not use metal material for now - Still WIP
+            new_ray.origin = record.intersection_point + record.normal * 0.01f;
+            out_reflection = 1.f;
             return new_ray;
         }
         else
@@ -625,6 +643,7 @@ namespace PT2
             auto new_ray      = ray;
             new_ray.direction = glm::reflect(ray.direction, record.normal);
             new_ray.origin    = record.intersection_point + record.normal * 0.01f;
+            out_reflection = 1.f;
             return new_ray;
         }
     }
@@ -691,7 +710,6 @@ namespace PT2
                         {
                             auto reflection = -1.f;
                             ray = _process_hit(current, ray, reflection);
-                            if (reflection == -1.f) reflection = current.hit_material->reflectiveness;
                             if (_loaded_materials.empty())
                             {
                                 final += throughput * 0.3f;
