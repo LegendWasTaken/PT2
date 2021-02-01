@@ -11,6 +11,10 @@
 
 #include <stb/stb_image.h>
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+
+#include <stb/stb_write.h>
+
 #define TINYOBJLOADER_IMPLEMENTATION
 
 #include <tinyobj/tinyobjloader.h>
@@ -383,6 +387,8 @@ namespace PT2
                 ImGui::InputFloat3("Look At", &camera_look_at[0]);
                 ImGui::SliderFloat("FOV", &fov, 30, 120);
                 const auto update = ImGui::Button("Re-Render");
+                ImGui::NewLine();
+                const auto export_render = ImGui::Button("Export / Save");
                 ImGui::End();
 
                 if (update)
@@ -402,6 +408,15 @@ namespace PT2
                     _render_pool.start();
                     _render_screen();
                 }
+
+                if (export_render)
+                {
+                    const auto copy = _ray_tracing_context.buffer;
+
+
+
+                }
+
             }
 
             glUseProgram(program);
