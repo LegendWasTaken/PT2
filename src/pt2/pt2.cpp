@@ -22,6 +22,7 @@
 #include <imgui/imgui_impl_opengl3.h>
 
 #include <pt2/imgui_custom.h>
+#include <pt2/sampling.h>
 
 namespace
 {
@@ -150,6 +151,26 @@ namespace PT2
         glLinkProgram(program);
         glUseProgram(program);
 
+        // Store the window size
+        glfwGetWindowSize(_window, &_screen_resolution.x, &_screen_resolution.y);
+
+        // Setup mouse callback (Currently only used for material selector)
+        glfwSetWindowUserPointer(_window, this);
+        glfwSetMouseButtonCallback(
+          _window,
+          [](GLFWwindow *window, int button, int action, int mods) {
+              const auto window_ptr = (PT2::Renderer *) glfwGetWindowUserPointer(
+                window);    // Yes I know C style cast leave me alone
+              const auto click_type = button == GLFW_MOUSE_BUTTON_RIGHT ? ClickType::RIGHT
+              : button == GLFW_MOUSE_BUTTON_LEFT                        ? ClickType::LEFT
+                                                                        : ClickType::UNKNOWN;
+              auto       cursor_x   = 0.0;
+              auto       cursor_y   = 0.0;
+              glfwGetCursorPos(window, &cursor_x, &cursor_y);
+              if (click_type != ClickType::UNKNOWN && action == GLFW_PRESS)
+                  window_ptr->_handle_mouse(cursor_x, cursor_y, click_type);
+          });
+
         // Update the rendering context
         _rendering_context.gl_program         = program;
         _rendering_context.gl_fragment_shader = fragment_shader;
@@ -203,8 +224,6 @@ namespace PT2
             {
                 ImGui::Begin("Display Options");
                 ImGui::Text("Texture Display Offset");
-                ImGui::SliderFloat("Pos X", &_render_target_setting.x_offset, 0.0f, 1.0f);
-                ImGui::SliderFloat("Pos Y", &_render_target_setting.y_offset, 0.0f, 1.0f);
                 ImGui::SliderFloat("Scale X", &_render_target_setting.x_scale, 0.0f, 1.0f);
                 ImGui::SliderFloat("Scale Y", &_render_target_setting.y_scale, 0.0f, 1.0f);
                 ImGui::End();
@@ -212,29 +231,28 @@ namespace PT2
 
             {
                 ImGui::Begin("Material Editor");
-                static Material *selected_material;
                 if (ImGui::BeginCombo(
                       "Edit Material",
-                      selected_material == nullptr ? nullptr : selected_material->name.c_str()))
+                      _selected_material == nullptr ? nullptr : _selected_material->name.c_str()))
                 {
                     for (auto &mat : _loaded_materials)
                     {
                         const auto selected = ImGui::Selectable(mat.name.c_str());
-                        if (selected) selected_material = &mat;
+                        if (selected) _selected_material = &mat;
                     }
                     ImGui::EndCombo();
                 }
 
-                if (selected_material != nullptr && !selected_material->name.empty())
+                if (_selected_material != nullptr && !_selected_material->name.empty())
                 {
                     std::string material_type = [&]() {
-                        if (selected_material->type == Material::DIFFUSE)
+                        if (_selected_material->type == Material::DIFFUSE)
                             return "Diffuse";
-                        else if (selected_material->type == Material::REFRACTIVE)
+                        else if (_selected_material->type == Material::REFRACTIVE)
                             return "Refractive";
-                        else if (selected_material->type == Material::MIRROR)
+                        else if (_selected_material->type == Material::MIRROR)
                             return "Mirror";
-                        else if (selected_material->type == Material::METAL)
+                        else if (_selected_material->type == Material::METAL)
                             return "Metal";
                         else
                             return "Unknown";
@@ -242,29 +260,29 @@ namespace PT2
                     if (ImGui::BeginCombo("Material Type", material_type.c_str()))
                     {
                         if (ImGui::Selectable("Diffuse"))
-                            selected_material->type = Material::DIFFUSE;
+                            _selected_material->type = Material::DIFFUSE;
                         if (ImGui::Selectable("Refractive"))
-                            selected_material->type = Material::REFRACTIVE;
-                        if (ImGui::Selectable("Mirror")) selected_material->type = Material::MIRROR;
-                        if (ImGui::Selectable("Metal")) selected_material->type = Material::METAL;
+                            _selected_material->type = Material::REFRACTIVE;
+                        if (ImGui::Selectable("Mirror")) _selected_material->type = Material::MIRROR;
+                        if (ImGui::Selectable("Metal")) _selected_material->type = Material::METAL;
                         ImGui::EndCombo();
                     }
-                    ImGui::ColorEdit3("Material Color", &selected_material->color[0]);
-                    ImGui::SliderFloat("Emission", &selected_material->emission, 0.0f, 1.0f);
-                    switch (selected_material->type)
+                    ImGui::ColorEdit3("Material Color", &_selected_material->color[0]);
+                    ImGui::SliderFloat("Emission", &_selected_material->emission, 0.0f, 1.0f);
+                    switch (_selected_material->type)
                     {
                     case Material::DIFFUSE:
-                        selected_material->reflectiveness = 1.0f / 3.1415f;
+                        _selected_material->reflectiveness = 1.0f / 3.1415f;
                         break;
                     case Material::REFRACTIVE:
-                        ImGui::SliderFloat("Roughness", &selected_material->roughness, 0.0f, 1.0f);
-                        ImGui::SliderFloat("IOR", &selected_material->ior, 1.0f, 3.0f);
+                        ImGui::SliderFloat("Roughness", &_selected_material->roughness, 0.0f, 1.0f);
+                        ImGui::SliderFloat("IOR", &_selected_material->ior, 1.0f, 3.0f);
 
                         break;
                     case Material::MIRROR:
                         ImGui::SliderFloat(
                           "Reflectiveness",
-                          &selected_material->reflectiveness,
+                          &_selected_material->reflectiveness,
                           0.0f,
                           1.0f);
 
@@ -272,10 +290,10 @@ namespace PT2
                     case Material::METAL:
                         ImGui::SliderFloat(
                           "Reflectiveness",
-                          &selected_material->reflectiveness,
+                          &_selected_material->reflectiveness,
                           0.0f,
                           1.0f);
-                        ImGui::SliderFloat("Roughness", &selected_material->roughness, 0.0f, 1.0f);
+                        ImGui::SliderFloat("Roughness", &_selected_material->roughness, 0.0f, 1.0f);
                         break;
                     }
                 }
@@ -349,7 +367,7 @@ namespace PT2
 
             {
                 static auto ctx             = RayTracingContext();
-                static auto camera_position = glm::vec3(2, 2, 2);
+                static auto camera_position = glm::vec3(-15, 12, 8);
                 static auto camera_look_at  = glm::vec3(0, 0, 0);
                 static auto fov             = 90.f;
 
@@ -416,15 +434,31 @@ namespace PT2
         glfwTerminate();
     }
 
+    void Renderer::_handle_mouse(float mouse_x, float mouse_y, ClickType click_type)
+    {
+        // Get the normalized screen coordinates of the mouse click
+        auto normal_x = mouse_x / _screen_resolution.x;
+        auto normal_y = mouse_y / _screen_resolution.y;
+
+        // Account for the image scaling / this stuff being dumb :(
+        normal_x /= .5f;
+
+        if (0.0f < normal_x && normal_x < 1.0f && 0.0f < normal_y && normal_y < 1.0f)
+        {
+            normal_y *= -1.f;
+            normal_y += 1.f;
+            const auto material_ray = _ray_tracing_context.camera.get_ray(normal_x, normal_y);
+
+            // Send a ray into the scene and get the material selected
+            const auto record = _intersect_scene(material_ray);
+
+            if (record.hit)
+                _selected_material = record.hit_material;
+        }
+    }
+
     void Renderer::_update_uniforms() const
     {
-        // Update the texture offset uniforms
-        glUniform1f(
-          glGetUniformLocation(_rendering_context.gl_program, "x_offset"),
-          -_render_target_setting.x_offset);    // 1 - x is added to make it feel more natural
-        glUniform1f(
-          glGetUniformLocation(_rendering_context.gl_program, "y_offset"),
-          -_render_target_setting.y_offset);
         glUniform1f(
           glGetUniformLocation(_rendering_context.gl_program, "x_scale"),
           _render_target_setting.x_scale);
@@ -490,9 +524,9 @@ namespace PT2
                 for (const auto idx : shape.mesh.indices) _indices.push_back(idx.vertex_index);
                 auto material           = Material();
                 material.name           = shape.name;
-                material.type           = Material::MIRROR;
+                material.type           = Material::DIFFUSE;
                 material.reflectiveness = 1.f;
-                material.color          = glm::vec3(rand_float(), rand_float(), rand_float());
+                material.color          = glm::vec3(1.f, 1.f, 1.f);
 
                 _loaded_materials.push_back(std::move(material));
 
@@ -526,6 +560,7 @@ namespace PT2
         if (indices != nullptr)
             std::memcpy(indices, _indices.data(), sizeof(uint32_t) * _indices.size());
 
+        _selected_material = nullptr;
         rtcCommitGeometry(_geometry);
         rtcAttachGeometry(_scene, _geometry);
         rtcCommitScene(_scene);
@@ -535,7 +570,6 @@ namespace PT2
     {
         auto detail = RenderTaskDetail();
 
-        const auto tile_count = _ray_tracing_context.tiles.count;
         const auto resolution = _ray_tracing_context.resolution;
         const auto tile_size  = _ray_tracing_context.tiles;
 
@@ -600,42 +634,103 @@ namespace PT2
 
     Ray Renderer::_process_hit(const HitRecord &record, const Ray &ray, float &out_reflection)
     {
+        out_reflection = record.hit_material->reflectiveness;
         if (record.hit_material->type == Material::MIRROR)
         {
             auto new_ray      = ray;
             new_ray.direction = glm::reflect(ray.direction, record.normal);
             new_ray.origin    = record.intersection_point + record.normal * 0.01f;
-            out_reflection = 1.f;
+            return new_ray;
+        }
+        else if (record.hit_material->type == Material::REFRACTIVE)
+        {
+            auto       new_ray = ray;
+            const auto ior     = record.hit_material->ior;
+
+            const auto refract =
+              [](const glm::vec3 &v, const glm::vec3 &n, float nit, glm::vec3 &refracted) {
+                  const auto uv   = glm::normalize(v);
+                  const auto dt   = glm::dot(uv, n);
+                  const auto disc = 1.0f - nit * nit * (1 - dt * dt);
+                  if (disc > 0)
+                  {
+                      refracted = (uv - n * dt) * nit - n * sqrtf(disc);
+                      return true;
+                  }
+                  return false;
+              };
+
+            const auto schlick = [](float cosine, float ref_index) {
+                const auto r0 = powf((1.0f - ref_index) / (1.0f + ref_index), 2.0f);
+                return r0 + (1.0f - r0) * powf((1 - cosine), 5);
+            };
+
+            auto outward_normal = glm::vec3();
+            auto nit            = 0.0f;
+            auto cosine         = 0.0f;
+            auto reflected      = glm::reflect(ray.direction, record.normal);
+
+            if (glm::dot(ray.direction, record.normal) > 0.0f)
+            {
+                outward_normal = record.normal;
+                nit            = ior;
+                cosine         = ior * glm::dot(ray.direction, record.normal);
+            }
+            else
+            {
+                outward_normal = record.normal * -1.f;
+                nit            = 1.0f / ior;
+                cosine         = -glm::dot(ray.direction, record.normal);
+            }
+
+            auto refracted      = glm::vec3();
+            auto reflect_chance = 1.0f;
+
+            if (refract(ray.direction, outward_normal, nit, refracted))
+                reflect_chance = schlick(cosine, ior);
+
+            if (rand_float() < reflect_chance)
+            {
+                new_ray.origin    = record.intersection_point + outward_normal * 0.1f;
+                new_ray.direction = reflected;
+            }
+            else
+            {
+                new_ray.origin    = record.intersection_point + outward_normal * -0.1f;
+                new_ray.direction = refracted;
+            }
+
             return new_ray;
         }
         else if (record.hit_material->type == Material::DIFFUSE)
         {
-            auto new_ray = ray;
-            const auto u = rand_float();
-            const auto v = rand_float();
-            const auto phi = 2.0f * 3.1415f * u;
-            const auto cos_theta = 2.0f * v - 1.0f;
-            const auto a = sqrtf(1.0f - cos_theta * cos_theta);
-            new_ray.direction = record.normal + glm::normalize(glm::vec3(a * cosf(phi), a * sinf(phi), cos_theta));
-            if (glm::dot(new_ray.direction, record.normal) < 0.0f)
-                throw std::exception();
-            new_ray.origin = record.intersection_point + record.normal * 0.01f;
-            out_reflection = fmaxf(0.f, glm::dot(record.normal, ray.direction));
+            auto       new_ray = ray;
+            const auto x       = rand_float();
+            const auto y       = rand_float();
+            auto       sample  = cos_sample_hemisphere(x, y);
+            if (glm::dot(sample, record.normal) < 0.0f) sample *= -1.f;
+            new_ray.direction = glm::normalize(record.normal + sample);
+            new_ray.origin    = record.intersection_point + record.normal * 0.01f;
+            out_reflection    = fmaxf(0.f, glm::dot(record.normal, new_ray.direction));
             return new_ray;
         }
         else if (record.hit_material->type == Material::METAL)
         {
-            auto new_ray = ray;
-            const auto u = rand_float();
-            const auto v = rand_float();
-            const auto phi = 2.0f * 3.1415f * u;
-            const auto cos_theta = 2.0f * v - 1.0f;
-            const auto a = sqrtf(1.0f - cos_theta * cos_theta);
-            new_ray.direction = record.normal * glm::normalize(glm::vec3(a * cosf(phi), a * sinf(phi), cos_theta));
-            if (glm::dot(new_ray.direction, record.normal) < 0.0f)
-                throw std::exception(); // This throws, do not use metal material for now - Still WIP
+            auto new_ray   = ray;
             new_ray.origin = record.intersection_point + record.normal * 0.01f;
-            out_reflection = 1.f;
+
+            const auto reflected = glm::normalize(glm::reflect(ray.direction, record.normal));
+            new_ray.direction    = reflected;
+            if (record.hit_material->roughness > 0.0f)
+            {
+                const auto x      = rand_float();
+                const auto y      = rand_float();
+                auto       sample = cos_sample_hemisphere(x, y);
+                if (glm::dot(sample, record.normal) < 0.0f) sample *= -1.f;
+                new_ray.direction =
+                  glm::normalize(reflected + record.hit_material->roughness * sample);
+            }
+
             return new_ray;
         }
         else
@@ -643,7 +738,7 @@ namespace PT2
             auto new_ray      = ray;
             new_ray.direction = glm::reflect(ray.direction, record.normal);
             new_ray.origin    = record.intersection_point + record.normal * 0.01f;
-            out_reflection = 1.f;
+            out_reflection    = 1.f;
             return new_ray;
         }
     }
@@ -709,7 +804,7 @@ namespace PT2
                         else
                         {
                             auto reflection = -1.f;
-                            ray = _process_hit(current, ray, reflection);
+                            ray             = _process_hit(current, ray, reflection);
                             if (_loaded_materials.empty())
                             {
                                 final += throughput * 0.3f;
@@ -753,7 +848,7 @@ namespace PT2
              thread_local static std::uniform_real_distribution<float> dist(0.f, 1.f);
              return dist(gen);
          }
-
+     
          uint32_t load_image(std::string_view image_name)
          {
              int   width, height, components;
@@ -762,18 +857,18 @@ namespace PT2
              stbi_image_free(data);
              return loaded_images.size() - 1;
          }
-
+     
          void load_model(std::string path, std::string name)
          {
              models.emplace_back(std::move(path), std::move(name));
          }
-
+     
          void render_scene(SceneRenderDetail detail, uint32_t *buffer)
          {
              // Start of splitting the scene into different areas and work loads for the threads to
      use std::mutex                                work_access_mutex; std::queue<std::pair<uint16_t,
      uint16_t>> work_queue;
-
+     
              const auto next_pixels = [&](std::pair<uint16_t, uint16_t> &vec) {
                  if (!work_queue.empty())
                  {
@@ -784,19 +879,19 @@ namespace PT2
                  }
                  return !work_queue.empty();
              };
-
+     
              const auto x_tiles = detail.width / 16;
              const auto y_tiles = detail.height / 16;
-
+     
              bool     left     = false;
              bool     down     = false;
              uint16_t distance = 1;
              //        for (auto i = 0; i < 16; i++)
              //            for (auto j = 0; j < 16; j++) work_queue.emplace(j, i);
              //        work_queue.emplace(15, 15);
-
+     
              // Todo: Fix this, bcuz its really cool and worth it
-
+     
              std::pair<uint16_t, uint16_t> coord;
              coord.first  = 7;
              coord.second = 7;
@@ -809,7 +904,7 @@ namespace PT2
                      work_queue.emplace(coord);
                  }
                  down = !down;
-
+     
                  for (int i = 0; i < distance; i++)
                  {
                      coord.second += left ? -1 : 1;
@@ -818,22 +913,22 @@ namespace PT2
                  left = !left;
                  distance++;
              }
-
+     
              const auto scene_camera = Camera(
                detail.camera.origin,
                detail.camera.lookat,
                60,
                (float) detail.width / (float) detail.height);
-
+     
              const auto local_skybox = &loaded_images[skybox];
-
+     
              std::vector<Vec3>         emissions;
              std::vector<Vec3>         vertices;
              std::vector<Vec3>         normals;
              std::vector<Vec3>         colours;
              std::vector<MaterialData> material_data;
              std::vector<uint32_t>     indices;
-
+     
              for (const auto &model_path : models)
              {
                  tinyobj::attrib_t                attrib;
@@ -850,11 +945,11 @@ namespace PT2
                    model_full_path.c_str(),
                    model_path.first.c_str(),
                    true);
-
+     
                  if (!warn.empty()) std::cout << warn << std::endl;
                  if (!err.empty()) std::cerr << err << std::endl;
                  if (!ret) exit(-1);
-
+     
                  const auto vertex_count = attrib.vertices.size() / 3;
                  colours.reserve(colours.size() + vertex_count);
                  indices.reserve(indices.size() + vertex_count);
@@ -870,7 +965,7 @@ namespace PT2
                        attrib.vertices[i + 1],
                        attrib.vertices[i + 2]);
                  }
-
+     
                  std::unordered_map<std::string, std::unique_ptr<Image>> loaded_textures;
                  for (const auto &material : materials)
                  {
@@ -890,7 +985,7 @@ namespace PT2
                          stbi_image_free(data);
                      }
                  }
-
+     
                  for (const auto &shape : shapes)
                  {
                      auto index_offset = size_t(0);
@@ -904,7 +999,7 @@ namespace PT2
                          {
                              const auto idx = shape.mesh.indices[index_offset + v];
                              indices.push_back(idx.vertex_index);
-
+     
                              //                        material_data.diffuseness[idx.vertex_index] =
                              //                        .0f;
                              //                        material_data.reflectiveness[idx.vertex_index]
@@ -912,12 +1007,12 @@ namespace PT2
                              //                        .0f;
      material_data.glassiness[idx.vertex_index]
                              //                        = 1.f;
-
+     
                              if (mat_exists)
                              {
                                  emissions[idx.vertex_index] =
                                    Vec3(mat.emission[0], mat.emission[1], mat.emission[2]);
-
+     
                                  if (mat.name == "Material.002")
                                  {
                                      material_data[idx.vertex_index].diffuseness = 0;
@@ -925,7 +1020,7 @@ namespace PT2
                                      colours[idx.vertex_index]                   = Vec3(0.7, 0.7,
      0.7);
                                  }
-
+     
                                  if (mat.name == "Material.003")
                                  {
                                      material_data[idx.vertex_index].diffuseness = 0;
@@ -933,7 +1028,7 @@ namespace PT2
                                      colours[idx.vertex_index]                   = Vec3(0.2, 0.2,
      0.8);
                                  }
-
+     
                                  if (mat.name == "windows")
                                  {
                                      material_data[idx.vertex_index].diffuseness = 0.f;
@@ -941,16 +1036,16 @@ namespace PT2
                                      colours[idx.vertex_index]                   = Vec3(0.2, 0.2,
      0.2);
                                  }
-
+     
                                  if (mat.name == "Material")
                                  { emissions[idx.vertex_index] = Vec3(0.6, 0.6, 3); }
-
+     
                                  if (!tex.empty())
                                  {
                                      const auto u     = attrib.texcoords[2 * idx.texcoord_index + 0];
                                      const auto v     = attrib.texcoords[2 * idx.texcoord_index + 1];
                                      const auto image = loaded_textures.find(tex)->second->get(u, v);
-
+     
                                      colours[idx.vertex_index] = Vec3(
                                        static_cast<float>(image >> 0 & 0xFF) / 255.f,
                                        static_cast<float>(image >> 8 & 0xFF) / 255.f,
@@ -967,7 +1062,7 @@ namespace PT2
                              ? std::thread::hardware_concurrency() - 1
                              : detail.thread_count;
              work_threads.reserve(thread_count);
-
+     
              const auto device    = rtcNewDevice(nullptr);
              const auto scene     = rtcNewScene(device);
              auto       geom      = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_TRIANGLE);
@@ -985,9 +1080,9 @@ namespace PT2
                RTC_FORMAT_UINT3,
                3 * sizeof(unsigned),
                indices.size() / 3);
-
+     
              rtcSetGeometryVertexAttributeCount(geom, 7);
-
+     
              rtcSetSharedGeometryBuffer(
                geom,
                RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
@@ -997,7 +1092,7 @@ namespace PT2
                0,
                sizeof(Vec3),
                colours.size());
-
+     
              rtcSetSharedGeometryBuffer(
                geom,
                RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
@@ -1007,7 +1102,7 @@ namespace PT2
                0,
                sizeof(Vec3),
                emissions.size());
-
+     
              rtcSetSharedGeometryBuffer(
                geom,
                RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
@@ -1017,7 +1112,7 @@ namespace PT2
                0,
                sizeof(MaterialData),
                material_data.size());
-
+     
              rtcSetSharedGeometryBuffer(
                geom,
                RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
@@ -1027,7 +1122,7 @@ namespace PT2
                sizeof(float) * 1,
                sizeof(MaterialData),
                material_data.size());
-
+     
              rtcSetSharedGeometryBuffer(
                geom,
                RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
@@ -1037,7 +1132,7 @@ namespace PT2
                sizeof(float) * 2,
                sizeof(MaterialData),
                material_data.size());
-
+     
              rtcSetSharedGeometryBuffer(
                geom,
                RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
@@ -1047,7 +1142,7 @@ namespace PT2
                sizeof(float) * 3,
                sizeof(MaterialData),
                material_data.size());
-
+     
              rtcSetSharedGeometryBuffer(
                geom,
                RTC_BUFFER_TYPE_VERTEX_ATTRIBUTE,
@@ -1057,16 +1152,16 @@ namespace PT2
                sizeof(float) * 4,
                sizeof(MaterialData),
                material_data.size());
-
+     
              if (_vertices != nullptr)
                  ::memcpy(_vertices, vertices.data(), sizeof(Vec3) * vertices.size());
              if (_indices != nullptr)
                  ::memcpy(_indices, indices.data(), sizeof(uint32_t) * indices.size());
-
+     
              rtcCommitGeometry(geom);
              rtcAttachGeometry(scene, geom);
              rtcCommitScene(scene);
-
+     
              const auto start = std::chrono::steady_clock::now();
              for (uint8_t i = 0; i < thread_count; i++)
              {
@@ -1077,12 +1172,12 @@ namespace PT2
                          if (!next_pixels(next_grid)) break;
                          next_grid.first *= x_tiles;
                          next_grid.second *= y_tiles;
-
+     
                          const auto x_max =
                            next_grid.first == 15 ? detail.width : next_grid.first + x_tiles;
                          const auto y_max =
                            next_grid.second == 15 ? detail.height : next_grid.second + y_tiles;
-
+     
                          for (int x = next_grid.first; x < x_max; x++)
                          {
                              for (int y = next_grid.second; y < y_max; y++)
@@ -1095,11 +1190,11 @@ namespace PT2
                                        ((float) y + rand()) / (float) detail.height);
                                      auto throughput = Vec3(1, 1, 1);
                                      auto final      = Vec3(0, 0, 0);
-
+     
                                      for (auto bounce = 0; bounce < detail.max_bounces; bounce++)
                                      {
                                          auto current = pt2::intersect_scene(ray, scene);
-
+     
                                          if (!current.hit)
                                          {
                                              float u = 0.5f +
@@ -1116,10 +1211,10 @@ namespace PT2
                                          final += throughput * current.emission;
                                          throughput *= current.albedo * current.reflectiveness;
                                      }
-
+     
                                      final_pixel += final;
                                  }
-
+     
                                  buffer[x + y * detail.width] |= static_cast<uint8_t>(
                                    fminf(sqrtf(final_pixel.x / (float) detail.spp), 1.f) * 255);
                                  buffer[x + y * detail.width] |=
@@ -1136,26 +1231,26 @@ namespace PT2
                      }
                  });
              }
-
+     
              for (uint8_t i = 0; i < thread_count; i++) work_threads[i].join();
-
+     
              const auto end = std::chrono::steady_clock::now();
              std::cout << "Time difference = "
                        << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
                        << "[ms]" << std::endl;
          }
-
+     
      #ifdef PT2_GLFW
-
+     
          void render_and_display_scene(SceneRenderDetail detail)
          {
              glfwInit();
              const auto window = glfwCreateWindow(detail.width, detail.height, "PT2", nullptr,
      nullptr); glfwMakeContextCurrent(window);
-
+     
              std::vector<uint32_t> data;
              data.resize(detail.width * detail.height);
-
+     
              std::thread render_thread([&] { render_scene(detail, data.data()); });
              while (!glfwWindowShouldClose(window))
              {
@@ -1166,18 +1261,18 @@ namespace PT2
              }
              render_thread.join();
          }
-
+     
      #endif
-
+     
          void process_hit_material(Ray &ray, HitRecord &record)
          {
              ray.origin            = record.intersection_point + record.normal * 0.01f;
              ray.direction         = ray.direction.reflect(record.normal);
              record.reflectiveness = 1.f;
              return;
-
+     
              auto material_branch = rand();
-
+     
              if (material_branch < record.material_data.diffuseness)
              {
                  ray.origin           = record.intersection_point + record.normal * 0.01f;
@@ -1192,7 +1287,7 @@ namespace PT2
                  return;
              }
              material_branch -= record.material_data.diffuseness;
-
+     
              if (material_branch < record.material_data.metalness)
              {
                  /** Cook Torrence BRDF

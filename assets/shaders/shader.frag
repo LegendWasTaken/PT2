@@ -18,7 +18,7 @@ void main()
 {
     vec2 normalizedCoordinate = gl_FragCoord.xy / vec2(screen_width, screen_height); // Create normalized UV coordinates on screen
     normalizedCoordinate.y /= screen_width / screen_height; // Normalize aspect ratio
-    normalizedCoordinate /= vec2(x_scale, y_scale);
     normalizedCoordinate += vec2(x_offset, y_offset);
+    normalizedCoordinate /= vec2(x_scale, y_scale);
     FragColor = texture(texture1, normalizedCoordinate);
 }

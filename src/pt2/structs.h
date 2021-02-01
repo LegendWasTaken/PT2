@@ -137,7 +137,7 @@ namespace PT2
         } tiles;
         std::vector<uint32_t> buffer;
 
-        Camera camera = Camera(glm::vec3(2, 2, 0), glm::vec3(0, 0, 0), 90, 1);
+        Camera camera = Camera(glm::vec3(-15, 12, 8), glm::vec3(0, 0, 0), 90, 1);
     };
 
 }    // namespace PT2

@@ -27,6 +27,13 @@ namespace PT2
         OBJ
     };
 
+    enum class ClickType
+    {
+        LEFT,
+        RIGHT,
+        UNKNOWN
+    };
+
     class Renderer
     {
     public:
@@ -42,6 +49,8 @@ namespace PT2
         static void _read_file(const std::string &path, std::string &contents);
 
         void _handle_window();
+
+        void _handle_mouse(float mouse_x, float mouse_y, ClickType click_type);
 
         void _update_uniforms() const;
 
@@ -60,6 +69,14 @@ namespace PT2
         RenderTargetSettings _render_target_setting;
         RayTracingContext    _ray_tracing_context;
         RenderingContext     _rendering_context;
+
+        Material *_selected_material = nullptr;
+
+        struct
+        {
+            int x;
+            int y;
+        } _screen_resolution;
 
         RTCScene    _scene;
         RTCDevice   _device;

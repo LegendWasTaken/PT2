@@ -4,7 +4,7 @@ int main()
 {
 
     auto renderer = PT2::Renderer();
-    renderer.load_model("./assets/models/rabbit.obj", PT2::ModelType::OBJ);
+    renderer.load_model("./assets/models/stanford-dragon.obj", PT2::ModelType::OBJ);
         renderer.start_gui();
 
 /*
