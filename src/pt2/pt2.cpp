@@ -267,7 +267,8 @@ namespace PT2
                             _selected_material->type = Material::DIFFUSE;
                         if (ImGui::Selectable("Refractive"))
                             _selected_material->type = Material::REFRACTIVE;
-                        if (ImGui::Selectable("Mirror")) _selected_material->type = Material::MIRROR;
+                        if (ImGui::Selectable("Mirror"))
+                            _selected_material->type = Material::MIRROR;
                         if (ImGui::Selectable("Metal")) _selected_material->type = Material::METAL;
                         ImGui::EndCombo();
                     }
@@ -388,6 +389,13 @@ namespace PT2
                 ImGui::SliderFloat("FOV", &fov, 30, 120);
                 const auto update = ImGui::Button("Re-Render");
                 ImGui::NewLine();
+                static auto file_name = std::string("");
+                file_name.reserve(65);
+                ImGui::InputTextWithHint(
+                  "File Name",
+                  "The max file name length is 64!",
+                  file_name.data(),
+                  64);
                 const auto export_render = ImGui::Button("Export / Save");
                 ImGui::End();
 
@@ -411,12 +419,44 @@ namespace PT2
 
                 if (export_render)
                 {
-                    const auto copy = _ray_tracing_context.buffer;
+                    // Ensure that the export directory is created
+                    const auto export_directory        = std::filesystem::path("./export");
+                    const auto export_directory_exists = std::filesystem::exists(export_directory);
+
+                    if (!export_directory_exists)
+                        std::filesystem::create_directory(export_directory);
+
+                    // Create the file name day-month-year hour:minute:second.jpg
+                    const auto now            = std::chrono::system_clock::now();
+                    const auto time_now       = std::chrono::system_clock::to_time_t(now);
+                    const auto local_time_now = *localtime(&time_now);
+
+                    auto export_file_name_string = std::string();
+                    if (file_name.empty())
+                    {
+                        auto export_file_name = std::stringstream();
+
+                        export_file_name << "./export/";
+                        export_file_name << local_time_now.tm_hour << ':';      // Hour
+                        export_file_name << local_time_now.tm_min << ".jpg";    // Second
+                        export_file_name_string = std::string(export_file_name.str());
+                    }
+                    else
+                    {
+                        export_file_name_string = file_name;
+                    }
 
 
+                    stbi_flip_vertically_on_write(true);
 
+                    stbi_write_jpg(
+                      export_file_name_string.c_str(),
+                      _ray_tracing_context.resolution.x,
+                      _ray_tracing_context.resolution.y,
+                      4,
+                      _ray_tracing_context.buffer.data(),
+                      100);
                 }
-
             }
 
             glUseProgram(program);
@@ -467,8 +507,7 @@ namespace PT2
             // Send a ray into the scene and get the material selected
             const auto record = _intersect_scene(material_ray);
 
-            if (record.hit)
-                _selected_material = record.hit_material;
+            if (record.hit) _selected_material = record.hit_material;
         }
     }
 
